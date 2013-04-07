@@ -10,7 +10,10 @@ crossPaths := false
 
 retrieveManaged := true
 
-resolvers += "Typesafe Repository" at "http://repo.typesafe.com/typesafe/releases/"
+resolvers ++= Seq(
+  "Typesafe Repository" at "http://repo.typesafe.com/typesafe/releases/",
+  "Local Maven Repository" at Path.userHome.asFile.toURI.toURL + ".m2/repository"
+)
 
 libraryDependencies ++= Seq(
   "org.twitter4j" % "twitter4j-core" % "3.0.3",
@@ -20,5 +23,6 @@ libraryDependencies ++= Seq(
   "commons-codec" % "commons-codec" % "1.7",
   "org.apache.lucene" % "lucene-core" % "4.2.0",
   "org.apache.lucene" % "lucene-analyzers-common" % "4.2.0",
-  "org.apache.lucene" % "lucene-queryparser" % "4.2.0"
+  "org.apache.lucene" % "lucene-queryparser" % "4.2.0",
+  "edu.cmu.cs" % "ark-tweet-nlp" % "0.3.2"
 )

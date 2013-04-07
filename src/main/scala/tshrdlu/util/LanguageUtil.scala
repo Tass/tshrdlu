@@ -292,3 +292,13 @@ class Polarity extends OtherLexica("eng") {
   lazy val negWords = getLexicon("negative-words.txt.gz")
 }
 
+import cmu.arktweetnlp.Tagger
+import cmu.arktweetnlp.Tagger._
+import scala.collection.JavaConversions._
+case class Token(token: String, tag: String)
+object POSTagger {
+  lazy val tagger = new Tagger()
+  tagger.loadModel("/cmu/arktweetnlp/model.20120919")
+  
+  def apply(tweet: String): List[Token] = asScalaBuffer(tagger.tokenizeAndTag(tweet)).toList.map(token => Token(token.token, token.tag))
+}
