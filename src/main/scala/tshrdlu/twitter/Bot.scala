@@ -71,6 +71,7 @@ class Bot extends Actor with ActorLogging {
   val synonymStreamReplier = context.actorOf(Props[SynonymStreamReplier], name = "SynonymStreamReplier")
   val bigramReplier = context.actorOf(Props[BigramReplier], name = "BigramReplier")
   val luceneReplier = context.actorOf(Props[LuceneReplier], name = "LuceneReplier")
+  val topicModelReplier = context.actorOf(Props[TopicModelReplier], name = "TopicModelReplier")
 
   override def preStart {
     replierManager ! RegisterReplier(streamReplier)
@@ -78,6 +79,7 @@ class Bot extends Actor with ActorLogging {
     replierManager ! RegisterReplier(synonymStreamReplier)
     replierManager ! RegisterReplier(bigramReplier)
     replierManager ! RegisterReplier(luceneReplier)
+    replierManager ! RegisterReplier(topicModelReplier)
   }
 
   def receive = {
@@ -130,6 +132,9 @@ class ReplierManager extends Actor with ActorLogging {
       val replyFutures: Seq[Future[StatusUpdate]] = 
         repliers.map(r => (r ? ReplyToStatus(status)).mapTo[StatusUpdate])
 
+    //
+      Thread.sleep(15000)
+
       val futureUpdate = Future.sequence(replyFutures).map { candidates =>
         val numCandidates = candidates.length
         println("NC: " + numCandidates)
@@ -138,8 +143,10 @@ class ReplierManager extends Actor with ActorLogging {
         else
           randomFillerStatus(status)
       }
-
-      futureUpdate.foreach(context.parent ! UpdateStatus(_))
+    
+      for (status <- futureUpdate) {
+        context.parent ! UpdateStatus(status)
+      }
     
   }
 
