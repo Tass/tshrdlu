@@ -386,3 +386,24 @@ class LuceneReplier extends BaseReplier {
 
 }
 
+class HeyYouReplier extends BaseReplier {
+  import context.dispatcher
+  import tshrdlu.util.English
+  val searcher = new StreamReplier
+
+  def getReplies(status: Status, maxLength: Int = 140): Future[Seq[String]] = {
+    log.info("Looking for replies to replace names in")
+    val name = nameParts(status.getUser)
+    searcher.getReplies(status, maxLength).map({ replies =>
+      log.info(s"Found replies, replacing person-NE with $name")
+      ???
+    })
+  }
+
+  val lexicon = English.vocabulary.toSet - English.stopwords.toSet
+  def nameParts(user: User): Seq[String] = {
+    val name = user.getName
+    val parts = (4 to name.length).flatMap(name.sliding(_)).filter(lexicon)
+    parts ++ user.getScreenName.split(" ")
+  }
+}
