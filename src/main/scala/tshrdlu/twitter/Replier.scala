@@ -2,6 +2,7 @@ package tshrdlu.twitter
 
 import akka.actor._
 import twitter4j._
+import scala.concurrent.Future
 
 /**
  * An actor that constructs replies to a given status.
@@ -12,7 +13,6 @@ trait BaseReplier extends Actor with ActorLogging {
   import tshrdlu.util.SimpleTokenizer
 
   import context.dispatcher
-  import scala.concurrent.Future
   import akka.pattern.pipe
 
   def receive = {
@@ -41,7 +41,6 @@ class SynonymReplier extends BaseReplier {
   import TwitterRegex._
 
   import context.dispatcher
-  import scala.concurrent.Future
 
   def getReplies(status: Status, maxLength: Int = 140): Future[Seq[String]] = {
     log.info("Trying to reply synonym")
@@ -67,7 +66,6 @@ class TopicModelReplier extends BaseReplier {
   import akka.pattern.ask
   import akka.util._
   import scala.concurrent.duration._
-  import scala.concurrent.Future
   implicit val timeout = Timeout(10 seconds)
 
   val modeler = new TopicModeler("minTopicKeys.txt")
@@ -178,7 +176,6 @@ class StreamReplier extends BaseReplier {
   import akka.pattern.ask
   import akka.util._
   import scala.concurrent.duration._
-  import scala.concurrent.Future
   implicit val timeout = Timeout(10 seconds)
 
   /**
@@ -241,7 +238,6 @@ class SynonymStreamReplier extends StreamReplier {
   import akka.pattern.ask
   import akka.util._
   import scala.concurrent.duration._
-  import scala.concurrent.Future
 
   import tshrdlu.util.English._
   import TwitterRegex._
@@ -287,7 +283,6 @@ class BigramReplier extends BaseReplier {
   import akka.pattern.ask
   import akka.util._
   import scala.concurrent.duration._
-  import scala.concurrent.Future
   implicit val timeout = Timeout(10 seconds)
 
   /**
@@ -376,7 +371,6 @@ class LuceneReplier extends BaseReplier {
   import akka.pattern.ask
   import akka.util._
   import scala.concurrent.duration._
-  import scala.concurrent.Future
 
   def getReplies(status: Status, maxLength: Int = 140): Future[Seq[String]] = {
     log.info("Trying to do search replies by Lucene")
