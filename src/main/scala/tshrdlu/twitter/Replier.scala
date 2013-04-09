@@ -389,14 +389,21 @@ class LuceneReplier extends BaseReplier {
 class HeyYouReplier extends BaseReplier {
   import context.dispatcher
   import tshrdlu.util.English
+  import tshrdlu.util.POSTagger
+  import tshrdlu.util.Token
   val searcher = new StreamReplier
 
   def getReplies(status: Status, maxLength: Int = 140): Future[Seq[String]] = {
     log.info("Looking for replies to replace names in")
-    val name = nameParts(status.getUser)
+    val name = nameParts(status.getUser)(0)
     searcher.getReplies(status, maxLength).map({ replies =>
       log.info(s"Found replies, replacing person-NE with $name")
-      ???
+      val nounp: Function1[Token, Boolean] = {_.tag == "N"}
+      replies.map(POSTagger.apply)
+        .filter({tweet:List[Token] => tweet.find(nounp).nonEmpty})
+        .map({tweet =>
+              tweet.updated(tweet.indexWhere(nounp), Token(name, "N")).map(_.token).mkString(" ")
+        })
     })
   }
 
