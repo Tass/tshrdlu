@@ -2,63 +2,81 @@
 ** Pull requests
 https://github.com/utcompling/tshrdlu/pull/5
 https://github.com/utcompling/tshrdlu/pull/16
+
 ** What?
 These pull requests concern the removal of blocking behavior as
 implemented by `Await` and fix a bug connected with the code in the
 first PR.
+
 ** Why?
 Blocking should be avoided when possible.
+
 ** How?
 Future implements `foreach`, which creates a callback with
 side-effects. The bug was introduced because `context` is
 context-dependent, has a different value the time the callback is
 executed. If we evaluate the variable beforehand, this problem is
 solved.
+
 * Optional Reply
 ** Pull request
 https://github.com/utcompling/tshrdlu/pull/14
+
 ** What?
 This behavior drops responses from Repliers that either did not find
 a response or crashed.
+
 ** Why?
 Akka Actors are resilient themselves, but `Future.sequence` is not.
 When one of the actors asked fails, the whole sequenced future fails.
+
 ** How?
 `List[Option[A]].flatten` removes `Option`s that are `None`, leaving
 us with a list that only contains valid candidates. `Future.recover`
 translates a failed `Future` into a `None`, so it can be ignored by
 `flatten` instead of failing `Future.sequence`.
+
 * Akka Messages for incoming Tweets
 ** Pull request
 https://github.com/utcompling/tshrdlu/pull/9
+
 ** What?
 This implements message passing instead of method callback for
 incoming data from Twitter.
+
 ** Why?
 Akka advocates usage of messages over callbacks.
+
 ** How?
 A dummy-class which implements callbacks and each callback sends
 messages to an actor specified during initialization.
+
 * Repl
 ** Pull requests
 https://github.com/utcompling/tshrdlu/pull/15
 https://github.com/utcompling/tshrdlu/pull/22
+
 ** What?
 This implements a direct way to talk to the Bot without having to send
 them via Twitter. The bot still requires connection to Twitter.
+
 ** Why?
 This allows for faster testing of your code, as you don't have to
 talk to it via Twitter.
+
 ** How?
 The startup is done with some code in build.sbt which bootstraps the
 actor system. It sends fake tweet objects to the bot actor, which then
 runs the whole stack but doesn't publish the tweet in the end.
+
 * HeyYou
 ** What?
 This tokenizes the incoming tweet, looking for a noun, and replaces
 the noun with part of the name of the tweeter.
+
 ** Why?
 Because I can :-)
+
 ** How?
 The basis of the tweet is the `StreamReplier` which selects a list of
 tweets via a query based on the incoming tweet. This involved some
@@ -78,3 +96,6 @@ and if yes, replace that noun with one of the name parts. This mapping
 tokenizer splits the punctuation, so `mkString(" ")` doesn't work
 reliably and would produce `Tell me a story .' instead of `Tell me a
 story.', so I used a `replaceFirst` for simplicity.
+
+** Results
+
