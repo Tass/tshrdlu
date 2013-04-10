@@ -566,6 +566,7 @@ class HeyYouReplier extends BaseReplier {
   
   import java.util.Random
   val random = new Random(System.currentTimeMillis());
+  // The probability decreases the further you get to the end of the list.
   def somewhatRandomName[A](list: Seq[A]): A =
     list.zipWithIndex.flatMap({case (elem, pos) => List.fill(list.length-pos)(elem)})
       .apply(random.nextInt(list.length))
