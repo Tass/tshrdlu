@@ -378,6 +378,157 @@ class LuceneReplier extends BaseReplier {
 
 }
 
+/**
+ * A replier that replies based on unsupervised noun phrase chunking of a given tweet.
+ */
+class ChunkReplier extends BaseReplier {
+  import Bot._
+  import tshrdlu.util.{English, Lucene, SimpleTokenizer}
+  import jarvis.nlp.TrigramModel
+  import jarvis.nlp.util._
+  import scala.concurrent.Future  
+  import TwitterRegex._
+  import akka.pattern.ask
+  import akka.util._
+  import context.dispatcher
+  import scala.concurrent.duration._
+  import scala.concurrent.Future
+  import java.net.URL
+
+  implicit val timeout = Timeout(10 seconds)
+
+  //A Trigram language model based on a dataset of mostly english tweets
+  val LanguageModel = TrigramModel(SPLReader(this.getClass().getResource("/chunking/").getPath()))
+
+  val Chunker = new Chunker()
+
+  def getReplies(status: Status, maxLength: Int = 140): Future[Seq[String]] = {
+    log.info("Getting chunk tweets")
+    val text = status.getText.toLowerCase
+    val StripLeadMentionRE(withoutMention) = text
+    val selectedChunks = Chunker(withoutMention)
+      .map(c => (LanguageModel(SimpleTokenizer(c)), c))
+      .sorted
+      .take(2)
+      .map(_._2)
+    
+     val statusList: Seq[Future[Seq[Status]]] = selectedChunks
+         .map(chunk => (context.parent ? SearchTwitter(new Query(chunk))).mapTo[Seq[Status]])
+
+    val statusesFuture: Future[Seq[Status]] = Future.sequence(statusList).map(_.flatten)
+
+    statusesFuture
+      .map(status => extractText(status))
+      .map(_.filter(_.length <= maxLength))
+  }
+
+  /**
+   * Go through the list of Statuses, filter out the non-English ones,
+   * strip mentions from the front, filter any that have remaining
+   * mentions, and then return the head of the set, if it exists.
+   */
+   def extractText(statusList: Seq[Status]): Seq[String] = {
+     val useableTweets = statusList
+       .map(_.getText)
+       .map {
+         case StripMentionsRE(rest) => rest
+         case x => x
+       }.filter(tweet => tshrdlu.util.English.isEnglish(tweet) 
+                       &&  tshrdlu.util.English.isSafe(tweet)
+                       && !tweet.contains('@')
+                       && !tweet.contains('/'))
+      .map(t => (LanguageModel(SimpleTokenizer(t)), t))
+      .sorted
+      .reverse
+      .map{ case (k,t) => t}
+      //given the set of potential tweets, return the tweet that has
+      //the highest probability according to the language model
+      Seq(if (useableTweets.isEmpty) "I don't know what to say." else useableTweets.head)
+  }
+}
+
+/**
+ * An actor that responds to requests to make sandwiches.
+ *
+ * @see <a href="http://xkcd.com/149/">http://xkcd.com/149/</a>
+ */
+class SudoReplier extends BaseReplier {
+  import scala.concurrent.Future
+  import context.dispatcher
+
+  lazy val MakeSandwichRE = """(?i)(?:.*(\bsudo\b))?.*\bmake (?:me )?an?\b.*\bsandwich\b.*""".r
+
+  def getReplies(status: Status, maxLength: Int = 140): Future[Seq[String]] = {
+    log.info("Checking for sandwich requests")
+    val text = TwitterRegex.stripLeadMention(status.getText)
+    val replies: Seq[String] = Seq(text) collect {
+      case MakeSandwichRE(sudo) => {
+        Option(sudo) match {
+          case Some(_) => "Okay."
+          case None => "What? Make it yourself."
+        }
+      }
+    }
+    Future(replies.filter(_.length <= maxLength))
+  }
+}
+
+/** An actor that responds to a tweet if it can be replied 
+* by "Thats what she said". This is based on the work done by 
+*Chloe Kiddon and Yuriy Brun , University of Washington
+*That's What She Said: Double Entendre Identification
+* Dataset from Edwin Chen
+*/
+
+class TWSSReplier extends BaseReplier {
+  import scala.concurrent.Future
+  import context.dispatcher
+  import de.bwaldvogel.liblinear._; 
+  import scala.collection.mutable.ArrayBuffer
+  import tshrdlu.util.{TWSSModel, English,SimpleTokenizer}
+
+
+  val vocabulary = English.vocabularyTWSS.map(line => line.split(" ")(0)).toIndexedSeq
+  val IDFMap:Map[String,Int] = English.vocabularyTWSS.map { line=>
+    val tokens = line.split(" ");
+    (tokens(0),tokens(1).toInt)
+  }.toMap
+
+  def getReplies(status: Status , maxLength:Int = 140): Future[Seq[String]] ={
+    log.info("Checking if tweet can be responded with TWSS")
+    val tweet = TwitterRegex.stripLeadMention(status.getText.toLowerCase)
+    val tweetMap:Map[String,Int] = SimpleTokenizer(tweet)
+    .groupBy(x=> x)
+    .mapValues(x=> x.length)
+
+    val twssModel = TWSSModel()
+    val featureVector = getFeatureVector(tweetMap)
+    val prob = Array(0.0,0.0);
+    Linear.predictProbability(twssModel, getFeatureVector(tweetMap).toArray,prob);
+   // println(prob.toList);
+    val response = if(prob.toList(0) > 0.9 ) "Thats what she said !! :-P " else "Thats was exactly what I told him !! "
+    Future(Seq(response));
+  }
+  def getFeatureVector(document:Map[String,Int]): ArrayBuffer[Feature] ={
+    val feature = new ArrayBuffer[Feature](vocabulary.size);
+    var index=1;
+
+    vocabulary.foreach{ word=>
+      
+      if(document.contains(word))
+      {
+      val tf = document(word);
+      val idf = Math.log(7887/IDFMap(word));
+      val tf_idf = tf*idf;
+      val featureNode:Feature = new FeatureNode(index,tf_idf);
+      feature += featureNode
+      }
+      index +=1
+    }
+    feature
+  }
+}
+
 class HeyYouReplier extends BaseReplier {
   import context.dispatcher
   import tshrdlu.util.English

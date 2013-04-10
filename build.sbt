@@ -24,6 +24,7 @@ libraryDependencies ++= Seq(
   "org.apache.lucene" % "lucene-core" % "4.2.0",
   "org.apache.lucene" % "lucene-analyzers-common" % "4.2.0",
   "org.apache.lucene" % "lucene-queryparser" % "4.2.0",
+  "de.bwaldvogel" % "liblinear" % "1.92",
   "edu.cmu.cs" % "ark-tweet-nlp" % "0.3.2"
 )
 

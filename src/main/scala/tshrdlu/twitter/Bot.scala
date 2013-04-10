@@ -60,6 +60,7 @@ object Bot {
  */
 class Bot extends Actor with ActorLogging {
   import Bot._
+  import tshrdlu.twitter.LocationResolver
 
   val username = new TwitterStreamFactory().getInstance.getScreenName
   val streamer = new Streamer(context.self)
@@ -74,12 +75,23 @@ class Bot extends Actor with ActorLogging {
     ("bigram" -> context.actorOf(Props[BigramReplier], name = "BigramReplier")),
     ("lucene" -> context.actorOf(Props[LuceneReplier], name = "LuceneReplier")),
     ("topicModel" -> context.actorOf(Props[TopicModelReplier], name = "TopicModelReplier")),
-    ("heyYou" -> context.actorOf(Props[HeyYouReplier], name = "HeyYouReplier"))
-   )
+    ("heyYou" -> context.actorOf(Props[HeyYouReplier], name = "HeyYouReplier")),
+    ("chunk" -> context.actorOf(Props[ChunkReplier], name = "ChunkReplier")),
+    ("sudo" -> context.actorOf(Props[SudoReplier], name = "SudoReplier")),
+    ("twss" -> context.actorOf(Props[TWSSReplier], name = "TWSSReplier"))
   
   override def preStart {
     repliers.values.foreach(replierManager ! RegisterReplier(_))
-  }
+    // Attempt to create the LocationResolver actor
+    Option(System.getenv("TSHRDLU_GEONAMES_USERNAME")) match {
+      case Some(geoNamesUsername) =>
+        val locProps = Props(new LocationResolver(geoNamesUsername))
+        context.system.actorOf(locProps, name = "LocationResolver")
+      case None =>
+        log.warning("Environment variable TSHRDLU_GEONAMES_USERNAME not set. " +
+                    "LocationResolver will not be available.")
+    }
+}
 
   def receive = {
     case Start => streamer.stream.user
@@ -142,8 +154,8 @@ class ReplierManager extends Actor with ActorLogging {
           randomFillerStatus(status)
       }
 
-      futureUpdate.foreach(context.parent ! UpdateStatus(_))
-    
+      val bot = context.parent
+      futureUpdate.foreach(bot ! UpdateStatus(_))
   }
 
   lazy val fillerStatusMessages = Vector(
