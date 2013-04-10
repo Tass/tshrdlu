@@ -10,9 +10,13 @@ object ReplBot {
     val system = ActorSystem("Repl")
     val bot = system.actorOf(Props[ReplBot], name = "ReplBot")
     val IncTweet = """(\w+): (.*)""".r
+    val NamedTweet = """(.*), (\w+): (.*)""".r // Screen Name, realname: Says hellp
 
     io.Source.stdin.getLines.foreach {
       case IncTweet(user, message) => bot ! FakeStatus(message, user)
+      case NamedTweet(screen, user, message) => {
+        bot ! FakeStatus(message, FakeUser(user, screen))
+      }
       case _ => println("I don't understand.")
     }
   }
@@ -28,13 +32,16 @@ class ReplBot extends Bot {
 
 object FakeStatus {
   val random = new java.util.Random
-  def apply(id: Long, text: String, user: String): FakeStatus = new FakeStatus(id, text, user)
+  // Maybe implicits?
+  def apply(id: Long, text: String, user: String): FakeStatus = apply(id, text, FakeUser(user))
   def apply(text: String, user: String): FakeStatus = apply(random.nextInt, text, user)
+  def apply(text: String, user: User): FakeStatus = apply(random.nextInt, text, user)
+  def apply(id: Long, text: String, user: User): FakeStatus = new FakeStatus(id, text, user)
   def apply(text: String): FakeStatus = apply(text, "thedoctor")
 }
 
 // Add further fields via accessors.
-class FakeStatus(id: Long, text: String, user: String) extends Status {
+class FakeStatus(id: Long, text: String, user: User) extends Status {
   // Members declared in java.lang.Comparable
   def compareTo(other: twitter4j.Status): Int = Integer.valueOf((getId - other.getId).intValue())
 
@@ -58,7 +65,7 @@ class FakeStatus(id: Long, text: String, user: String) extends Status {
   def getRetweetedStatus(): twitter4j.Status = ???
   def getSource(): String = ???
   def getText(): String = text
-  def getUser(): twitter4j.User = FakeUser(user)
+  def getUser(): twitter4j.User = user
   def isFavorited(): Boolean = ???
   def isPossiblySensitive(): Boolean = ???
   def isRetweet(): Boolean = ???
@@ -73,6 +80,7 @@ class FakeStatus(id: Long, text: String, user: String) extends Status {
 object FakeUser {
   val random = new java.util.Random
   def apply(id: Long, name: String, screenName: String): FakeUser = new FakeUser(id, name, screenName)
+  def apply(name: String, screenName: String): FakeUser = apply(random.nextInt, name, screenName)
   def apply(name: String): FakeUser = apply(random.nextInt, name, name)
 }
 

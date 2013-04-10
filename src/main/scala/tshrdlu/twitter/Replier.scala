@@ -7,6 +7,8 @@ import scala.concurrent.Future
 import scala.concurrent.duration._
 import akka.util._
 
+case class PureReplies(status: Status, max: Int)
+
 /**
  * An actor that constructs replies to a given status.
  */
@@ -29,6 +31,7 @@ trait BaseReplier extends Actor with ActorLogging {
           new StatusUpdate(reply).inReplyToStatusId(status.getId)
         })
       } pipeTo sender
+    case PureReplies(status, max) => getReplies(status, max) pipeTo sender
   }
 
   def getReplies(status: Status, maxLength: Int): Future[Seq[String]]
@@ -380,19 +383,27 @@ class HeyYouReplier extends BaseReplier {
   import tshrdlu.util.English
   import tshrdlu.util.POSTagger
   import tshrdlu.util.Token
-  val searcher = new StreamReplier
+  implicit val timeout = Timeout(10 seconds)
+  val searcher = context.actorOf(Props[StreamReplier], name = "StreamReplier")
+  
+  import Bot._
+  // hack to foward the SearchTwitter message, since streamReplier
+  // uses context.parent
+  def forwardSearch: Receive = { case m: SearchTwitter => context.parent.forward(m) }
+  override def receive = forwardSearch.orElse(super.receive)
 
   def getReplies(status: Status, maxLength: Int = 140): Future[Seq[String]] = {
     log.info("Looking for replies to replace names in")
-    val name = nameParts(status.getUser)(0)
-    searcher.getReplies(status, maxLength).map({ replies =>
-      log.info(s"Found replies, replacing person-NE with $name")
+    val name = somewhatRandomName(nameParts(status.getUser))
+    (searcher ? PureReplies(status, maxLength)).mapTo[Seq[String]].map({ replies =>
+      log.info(s"Found replies, replacing a noun or person-named entity with $name")
       val nounp: Function1[Token, Boolean] = {_.tag == "N"}
-      replies.map(POSTagger.apply)
-        .filter({tweet:List[Token] => tweet.find(nounp).nonEmpty})
-        .map({tweet =>
-              tweet.updated(tweet.indexWhere(nounp), Token(name, "N")).map(_.token).mkString(" ")
-        })
+      replies.map(POSTagger.apply).zip(replies)
+        .flatMap({case(parsed:List[Token], pure) => parsed.find(nounp)
+                  // If a noun is found, replace it with the name.
+          .map({token => pure.replaceFirst(token.token, name)})
+                })
+        .filter(_.length < maxLength)
     })
   }
 
@@ -402,4 +413,10 @@ class HeyYouReplier extends BaseReplier {
     val parts = (4 to name.length).flatMap(name.sliding(_)).filter(lexicon)
     parts ++ user.getScreenName.split(" ")
   }
+  
+  import java.util.Random
+  val random = new Random(System.currentTimeMillis());
+  def somewhatRandomName[A](list: Seq[A]): A =
+    list.zipWithIndex.flatMap({case (elem, pos) => List.fill(list.length-pos)(elem)})
+      .apply(random.nextInt(list.length))
 }
