@@ -66,22 +66,21 @@ class Bot extends Actor with ActorLogging {
   val twitter = new TwitterFactory().getInstance
   val replierManager = context.actorOf(Props[ReplierManager], name = "ReplierManager")
 
-  val streamReplier = context.actorOf(Props[StreamReplier], name = "StreamReplier")
-  val synonymReplier = context.actorOf(Props[SynonymReplier], name = "SynonymReplier")
-  val synonymStreamReplier = context.actorOf(Props[SynonymStreamReplier], name = "SynonymStreamReplier")
-  val bigramReplier = context.actorOf(Props[BigramReplier], name = "BigramReplier")
-  val luceneReplier = context.actorOf(Props[LuceneReplier], name = "LuceneReplier")
-  val topicModelReplier = context.actorOf(Props[TopicModelReplier], name = "TopicModelReplier")
-  val heyYouReplier = context.actorOf(Props[HeyYouReplier], name = "HeyYouReplier")
+  val repliers = Map(
+    ("stream" -> context.actorOf(Props[StreamReplier], name = "StreamReplier")),
+    ("synonym" -> context.actorOf(Props[SynonymReplier], name = "SynonymReplier")),
+    ("synonym-stream" -> context.actorOf(Props[SynonymStreamReplier], name = "SynonymStreamReplier")),
+    ("bigram" -> context.actorOf(Props[BigramReplier], name = "BigramReplier")),
+    ("lucene" -> context.actorOf(Props[LuceneReplier], name = "LuceneReplier")),
+    ("topicModel" -> context.actorOf(Props[TopicModelReplier], name = "TopicModelReplier")),
+    ("heyYou" -> context.actorOf(Props[HeyYouReplier], name = "HeyYouReplier"))
+   )
+  
+  // Sadly no typecheck :-(
+  def loadReplier(name: String) { replierManager ! RegisterReplier(repliers(name)) }
 
   override def preStart {
-    replierManager ! RegisterReplier(streamReplier)
-    replierManager ! RegisterReplier(synonymReplier)
-    replierManager ! RegisterReplier(synonymStreamReplier)
-    replierManager ! RegisterReplier(bigramReplier)
-    replierManager ! RegisterReplier(luceneReplier)
-    replierManager ! RegisterReplier(topicModelReplier)
-    replierManager ! RegisterReplier(heyYouReplier)
+    repliers.values.foreach(replierManager ! _)
   }
 
   def receive = {
