@@ -23,7 +23,7 @@ solved.
 https://github.com/utcompling/tshrdlu/pull/14
 
 ** What?
-This behavior drops responses from Repliers that either did not find
+This behavior drops responses from `Repliers` that either did not find
 a response or crashed.
 
 ** Why?
@@ -65,7 +65,7 @@ This allows for faster testing of your code, as you don't have to
 talk to it via Twitter.
 
 ** How?
-The startup is done with some code in build.sbt which bootstraps the
+The startup is done with some code in `build.sbt` which bootstraps the
 actor system. It sends fake tweet objects to the bot actor, which then
 runs the whole stack but doesn't publish the tweet in the end.
 
@@ -98,4 +98,31 @@ reliably and would produce `Tell me a story .' instead of `Tell me a
 story.', so I used a `replaceFirst` for simplicity.
 
 ** Results
+Various answers as responding to a tweet from `John Wayne' named
+`thunderbird':
 
+- @thunderbird Don't judge bird unless you've heard their story.
+- @thunderbird tell me bird i dont know
+- @thunderbird I hate when John dont tell me straight up!  Tell me dont keep making up excuses
+- @thunderbird tweedy tell me my bird sound like a car that trying to start....lol
+- @thunderbird oh i forgot to tell you I do like bird now
+- @thunderbird Why shouldn't you tell Wayne when a clock is around? Because time will tell.
+
+Replacing the first noun works well, although the results may be a bit
+strange. The next step is to use the Stanford NER Classifier.
+
+** Libraries used
+The ark twitter POS tagger [1] is used here. I packaged it locally
+with
+
+git clone git://github.com/brendano/ark-tweet-nlp.git
+cd ark-tweet-nlp
+wget http://www.ark.cs.cmu.edu/TweetNLP/model.irc.20121211
+mv model.20120919 ark-tweet-nlp/src/main/resources/cmu/arktweetnlp/
+mvn package
+mvn install
+
+The artifact is created at sonatype [2], packaging is on the way.
+
+[1] http://www.ark.cs.cmu.edu/TweetNLP/
+[2] https://oss.sonatype.org/index.html
