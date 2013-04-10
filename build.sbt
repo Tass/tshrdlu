@@ -27,4 +27,4 @@ libraryDependencies ++= Seq(
   "edu.cmu.cs" % "ark-tweet-nlp" % "0.3.2"
 )
 
-initialCommands in console := "import tshrdlu.repl._\nReplBot.setup\nprintln(\"call sendTweet(text) or its overloads.\")\nprintln(\"To activate repliers, call ReplBot\")"
+initialCommands in console := "import tshrdlu.repl._\nReplBot.setup\nprintln(\"***\")\nprintln(\"To activate repliers, call ReplBot.loadReplier(name). See Bot.scala for names.\")\nprintln(\"call ReplBot.sendTweet(text) or its overloads.\")\nprintln(\"***\")"
