@@ -559,15 +559,16 @@ class HeyYouReplier extends BaseReplier {
 
   lazy val lexicon = English.vocabulary.toSet - English.stopwords.toSet
   def nameParts(user: User): Seq[String] = {
-    val name = user.getName
+    val name = user.getScreenName
     val parts = (4 to name.length).flatMap(name.sliding(_)).filter(lexicon)
-    parts ++ user.getScreenName.split(" ")
+    parts ++ user.getName.split(" ")
   }
   
   import java.util.Random
   lazy val random = new Random(System.currentTimeMillis());
   // The probability decreases the further you get to the end of the list.
-  def somewhatRandomName[A](list: Seq[A]): A =
-    list.zipWithIndex.flatMap({case (elem, pos) => List.fill(list.length-pos)(elem)})
-      .apply(random.nextInt(list.length))
+  def somewhatRandomName[A](list: Seq[A]): A = {
+    val randomList = list.zipWithIndex.flatMap({case (elem, pos) => List.fill(list.length-pos)(elem)})
+    randomList(random.nextInt(randomList.length))
+  }
 }

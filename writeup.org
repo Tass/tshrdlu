@@ -85,10 +85,10 @@ hacking in the receive, as the `StreamReplier` sends the
 here. For proper function, this message needs to be forwarded, so the
 `receive` method of the `HeyYouReplier` is patched.
 
-The name part is chosen by splitting the user name (not screen name),
+The name part is chosen by splitting the screen name (not user name),
 into parts which are in the English lexicon, so you can call someone
 which has a nick `thunderbird' `bird' or `thunder'. It also uses the
-split version of the screen name, but with a lower probability.
+split version of the user name, but with a lower probability.
 
 Now with a list of tweets, I filter by the ones that contain a noun
 and if yes, replace that noun with one of the name parts. This mapping
