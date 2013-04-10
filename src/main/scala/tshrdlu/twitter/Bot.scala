@@ -35,6 +35,7 @@ object Bot {
   object Shutdown
   case class MonitorUserStream(listen: Boolean)
   case class RegisterReplier(replier: ActorRef)
+  case class ReplierByName(replier: String)
   case class ReplyToStatus(status: Status)
   case class SearchTwitter(query: Query)
   case class UpdateStatus(update: StatusUpdate)
@@ -76,11 +77,8 @@ class Bot extends Actor with ActorLogging {
     ("heyYou" -> context.actorOf(Props[HeyYouReplier], name = "HeyYouReplier"))
    )
   
-  // Sadly no typecheck :-(
-  def loadReplier(name: String) { replierManager ! RegisterReplier(repliers(name)) }
-
   override def preStart {
-    repliers.values.foreach(replierManager ! _)
+    repliers.values.foreach(replierManager ! RegisterReplier(_))
   }
 
   def receive = {
@@ -103,7 +101,7 @@ class Bot extends Actor with ActorLogging {
         log.info("Replying to: " + status.getText)
         replierManager ! ReplyToStatus(status)
       }
-
+    case ReplierByName(name) => replierManager ! RegisterReplier(repliers(name))
   }
 }
   

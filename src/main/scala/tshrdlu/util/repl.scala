@@ -1,29 +1,32 @@
-package tshrdlu.twitter
+package tshrdlu.repl
 
 import akka.actor._
 import twitter4j._
 import akka.pattern.ask
 import akka.util._
+import tshrdlu.twitter.Bot._
 
 object ReplBot {
-  def main (args: Array[String]) {
-    val system = ActorSystem("Repl")
-    val bot = system.actorOf(Props[ReplBot], name = "ReplBot")
-    val IncTweet = """(\w+): (.*)""".r
-    val NamedTweet = """(.*), (\w+): (.*)""".r // Screen Name, realname: Says hellp
+  var bot: ActorRef = null
 
-    io.Source.stdin.getLines.foreach {
-      case IncTweet(user, message) => bot ! FakeStatus(message, user)
-      case NamedTweet(screen, user, message) => {
-        bot ! FakeStatus(message, FakeUser(user, screen))
-      }
-      case _ => println("I don't understand.")
-    }
+  def setup {
+    val system = ActorSystem("Repl")
+    bot = system.actorOf(Props[ReplBot], name = "ReplBot")
   }
+  
+  def loadReplier(name: String) { bot ! ReplierByName(name) }
+  
+  def sendTweet(text: String) { bot ! FakeStatus(text) }
+  def sendTweet(name: String, text: String) { bot ! FakeStatus(text, name) }
+  def sendTweet(screenName: String, name: String, text: String) { bot ! FakeStatus(text, FakeUser(name, screenName)) }
 }
 
-class ReplBot extends Bot {
-  import Bot._
+class ReplBot extends tshrdlu.twitter.Bot {
+
+  override def preStart {
+    // deactivate loading of all
+  }
+
   def replReceive: Receive = {
     case UpdateStatus(update) => log.info(s"got update: $update")
   }

@@ -26,3 +26,5 @@ libraryDependencies ++= Seq(
   "org.apache.lucene" % "lucene-queryparser" % "4.2.0",
   "edu.cmu.cs" % "ark-tweet-nlp" % "0.3.2"
 )
+
+initialCommands in console := "import tshrdlu.repl._\nReplBot.setup\nprintln(\"call sendTweet(text) or its overloads.\")\nprintln(\"To activate repliers, call ReplBot\")"
