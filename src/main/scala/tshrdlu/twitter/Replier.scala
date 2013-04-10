@@ -71,7 +71,7 @@ class TopicModelReplier extends BaseReplier {
   import context.dispatcher
   implicit val timeout = Timeout(10 seconds)
 
-  val modeler = new TopicModeler("minTopicKeys.txt")
+  lazy val modeler = new TopicModeler("minTopicKeys.txt")
 
   def getReplies(status: Status, maxLength: Int = 140): Future[Seq[String]] = {
     log.info("Trying to reply via topic models")
@@ -488,8 +488,8 @@ class TWSSReplier extends BaseReplier {
   import tshrdlu.util.{TWSSModel, English,SimpleTokenizer}
 
 
-  val vocabulary = English.vocabularyTWSS.map(line => line.split(" ")(0)).toIndexedSeq
-  val IDFMap:Map[String,Int] = English.vocabularyTWSS.map { line=>
+  lazy val vocabulary = English.vocabularyTWSS.map(line => line.split(" ")(0)).toIndexedSeq
+  lazy val IDFMap:Map[String,Int] = English.vocabularyTWSS.map { line=>
     val tokens = line.split(" ");
     (tokens(0),tokens(1).toInt)
   }.toMap
@@ -557,7 +557,7 @@ class HeyYouReplier extends BaseReplier {
     })
   }
 
-  val lexicon = English.vocabulary.toSet - English.stopwords.toSet
+  lazy val lexicon = English.vocabulary.toSet - English.stopwords.toSet
   def nameParts(user: User): Seq[String] = {
     val name = user.getName
     val parts = (4 to name.length).flatMap(name.sliding(_)).filter(lexicon)
@@ -565,7 +565,7 @@ class HeyYouReplier extends BaseReplier {
   }
   
   import java.util.Random
-  val random = new Random(System.currentTimeMillis());
+  lazy val random = new Random(System.currentTimeMillis());
   // The probability decreases the further you get to the end of the list.
   def somewhatRandomName[A](list: Seq[A]): A =
     list.zipWithIndex.flatMap({case (elem, pos) => List.fill(list.length-pos)(elem)})
