@@ -397,9 +397,8 @@ class HeyYouReplier extends BaseReplier {
     val name = somewhatRandomName(nameParts(status.getUser))
     (searcher ? PureReplies(status, maxLength)).mapTo[Seq[String]].map({ replies =>
       log.info(s"Found replies, replacing a noun or person-named entity with $name")
-      val nounp: Function1[Token, Boolean] = {_.tag == "N"}
       replies.map(POSTagger.apply).zip(replies)
-        .flatMap({case(parsed:List[Token], pure) => parsed.find(nounp)
+        .flatMap({case(parsed:List[Token], pure) => parsed.find({_.tag == "N"})
                   // If a noun is found, replace it with the name.
           .map({token => pure.replaceFirst(token.token, name)})
                 })
