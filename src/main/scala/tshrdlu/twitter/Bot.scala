@@ -79,6 +79,7 @@ class Bot extends Actor with ActorLogging {
     ("chunk" -> context.actorOf(Props[ChunkReplier], name = "ChunkReplier")),
     ("sudo" -> context.actorOf(Props[SudoReplier], name = "SudoReplier")),
     ("twss" -> context.actorOf(Props[TWSSReplier], name = "TWSSReplier"))
+  )
   
   override def preStart {
     repliers.values.foreach(replierManager ! RegisterReplier(_))
