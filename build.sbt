@@ -13,6 +13,7 @@ retrieveManaged := true
 resolvers ++= Seq(
   "Typesafe Repository" at "http://repo.typesafe.com/typesafe/releases/",
   "Local Maven Repository" at Path.userHome.asFile.toURI.toURL + ".m2/repository",
+  "Sonatype Snapshots" at "https://oss.sonatype.org/content/repositories/snapshots/",
   "Spray Repository" at "http://repo.spray.io/"
 )
 
@@ -27,7 +28,7 @@ libraryDependencies ++= Seq(
   "org.apache.lucene" % "lucene-queryparser" % "4.2.0",
   "de.bwaldvogel" % "liblinear" % "1.92",
   "org.scalanlp" % "chalk" % "1.1.3-SNAPSHOT",
-  "org.scalanlp" % "nak" % "1.1.2",
+  "org.scalanlp" % "nak" % "1.1.3-SNAPSHOT",
   "edu.cmu.cs" % "ark-tweet-nlp" % "0.3.2",
   "io.spray" %%  "spray-json" % "1.2.3"
 )
