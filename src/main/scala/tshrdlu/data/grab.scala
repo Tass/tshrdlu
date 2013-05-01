@@ -26,7 +26,7 @@ object Grab {
       user => ???
     })
 
-    users.filter(_._2 == Candidate).foreach({user => 
+    users.filter(_._2 == Candidate).toList.foreach({user => 
       val name = user._1
       users += (name -> Processing)
       print("testing " + name + " ")
@@ -111,9 +111,8 @@ object Grab {
       val text = status.getText
       text match {
         case text if text.contains("scala") => 1
-        case text if text.contains("akka") => 2
         case _ => 0
       }
-    }).foldLeft(0)(_ + _) > 5
+    }).foldLeft(0)(_ + _) > 0
   }
 }

@@ -39,11 +39,10 @@ object Bot {
   case class ReplyToStatus(status: Status)
   case class SearchTwitter(query: Query)
   case class UpdateStatus(update: StatusUpdate)
+  case class Retweet(id: Long)
 
   def main (args: Array[String]) {
     val system = ActorSystem("TwitterBot")
-    val sample = system.actorOf(Props[Sampler], name = "Sampler")
-    sample ! Sample
     val bot = system.actorOf(Props[Bot], name = "Bot")
     bot ! Start
   }
@@ -66,34 +65,10 @@ class Bot extends Actor with ActorLogging {
   val streamer = new Streamer(context.self)
 
   val twitter = new TwitterFactory().getInstance
-  val replierManager = context.actorOf(Props[ReplierManager], name = "ReplierManager")
+  val replier = context.actorOf(Props[Replier], name = "Replier")
 
-  val repliers = Map(
-    ("stream" -> context.actorOf(Props[StreamReplier], name = "StreamReplier")),
-    //("synonym" -> context.actorOf(Props[SynonymReplier], name = "SynonymReplier")),
-    ("synonym-stream" -> context.actorOf(Props[SynonymStreamReplier], name = "SynonymStreamReplier")),
-    ("bigram" -> context.actorOf(Props[BigramReplier], name = "BigramReplier")),
-    ("lucene" -> context.actorOf(Props[LuceneReplier], name = "LuceneReplier")),
-    ("topicModel" -> context.actorOf(Props[TopicModelReplier], name = "TopicModelReplier")),
-    ("chunk" -> context.actorOf(Props[ChunkReplier], name = "ChunkReplier")),
-    //("sudo" -> context.actorOf(Props[SudoReplier], name = "SudoReplier")),
-    ("twss" -> context.actorOf(Props[TWSSReplier], name = "TWSSReplier")),
-    ("sentimentReplier" -> context.actorOf(Props[SentimentReplier], name = "SentimentReplier"))
-  )
-  
   override def preStart {
-    repliers.values.foreach(replierManager ! RegisterReplier(_))
-
-    // Attempt to create the LocationResolver actor
-    Option(System.getenv("TSHRDLU_GEONAMES_USERNAME")) match {
-      case Some(geoNamesUsername) =>
-        val locProps = Props(new LocationResolver(geoNamesUsername))
-        context.system.actorOf(locProps, name = "LocationResolver")
-      case None =>
-        log.warning("Environment variable TSHRDLU_GEONAMES_USERNAME not set. " +
-                    "LocationResolver will not be available.")
-    }
-}
+  }
 
   def receive = {
     case Start => streamer.stream.user
@@ -113,15 +88,15 @@ class Bot extends Actor with ActorLogging {
       val replyName = status.getInReplyToScreenName
       if (replyName == username) {
         log.info("Replying to: " + status.getText)
-        replierManager ! ReplyToStatus(status)
+        replier ! ReplyToStatus(status)
       }
-    case ReplierByName(name) => replierManager ! RegisterReplier(repliers(name))
+    case Retweet(id) =>
+      twitter.retweetStatus(id)
   }
 }
   
-
-
-class ReplierManager extends Actor with ActorLogging {
+case class Filter(about: Set[String], from: Set[String], by: String, include: Boolean)
+class Replier extends Actor with ActorLogging {
   import Bot._
 
   import context.dispatcher
@@ -134,135 +109,37 @@ class ReplierManager extends Actor with ActorLogging {
 
   lazy val random = new scala.util.Random
 
-  var repliers = Vector.empty[ActorRef]
-
   def receive = {
-    case RegisterReplier(replier) => 
-      repliers = repliers :+ replier
-
-    case ReplyToStatus(status) =>
-
-      val replyFutures: Seq[Future[Option[StatusUpdate]]] = 
-        repliers.map(r => (r ? ReplyToStatus(status))
-          .recover { case e: Throwable => None }
-          .mapTo[Option[StatusUpdate]])
-
-      val futureUpdate = Future.sequence(replyFutures).map(_.flatten).map { candidates =>
-        val numCandidates = candidates.length
-        log.info("Number of candidates: " + numCandidates)
-        if (numCandidates > 0)
-          candidates(random.nextInt(numCandidates))
-        else
-          randomFillerStatus(status)
+    case ReplyToStatus(status) => {
+      val text = status.getText
+      var replyText = ""
+      parse(status) match {
+        case Some(query) => {
+          replyText = "Working on it."
+          // querySetup ! query
+        }
+        case None => "Sorry, I couldn't parse that."
       }
 
-      val bot = context.parent
-      futureUpdate.foreach(bot ! UpdateStatus(_))
-  }
-
-  lazy val fillerStatusMessages = Vector(
-    "La de dah de dah...",
-    "I'm getting bored.",
-    "Say what?",
-    "What can I say?",
-    "That's the way it goes, sometimes.",
-    "Could you rephrase that?",
-    "Oh well.",
-    "Yawn.",
-    "I'm so tired.",
-    "I seriously need an upgrade.",
-    "I'm afraid I can't do that.",
-    "What the heck? This is just ridiculous.",
-    "Don't upset the Wookiee!",
-    "Hmm... let me think about that.",
-    "I don't know what to say to that.",
-    "I wish I could help!",
-    "Make me a sandwich?",
-    "Meh.",
-    "Are you insinuating something?",
-    "If I only had a brain..."
-  )
-
-  lazy val numFillers = fillerStatusMessages.length
-
-  def randomFillerStatus(status: Status) = {
-    val text = fillerStatusMessages(random.nextInt(numFillers))
-    val replyName = status.getUser.getScreenName
-    val reply = "@" + replyName + " " + text
-    new StatusUpdate(reply).inReplyToStatusId(status.getId)
-  }
-}
-
-
-// The Sampler collects possible responses. Does not implement a
-// filter for bot requests, so it should be connected to the sample
-// stream. Batches tweets together using the collector so we don't
-// need to add every tweet to the index on its own.
-class Sampler extends Actor with ActorLogging {
-  import Bot._
-
-  val streamer = new Streamer(context.self)
-
-  var collector, luceneWriter: ActorRef = null
-
-  override def preStart = {
-    collector = context.actorOf(Props[Collector], name="Collector")
-    luceneWriter = context.actorOf(Props[LuceneWriter], name="LuceneWriter")
-  }
-
-  def receive = {
-    case Sample => streamer.stream.sample
-    case status: Status => collector ! status
-    case tweets: List[Status] => luceneWriter ! tweets
-  }
-}
-
-
-
-// Collects until it reaches 100 and then sends them back to the
-// sender and the cycle begins anew.
-class Collector extends Actor with ActorLogging {
-
-  val collected = scala.collection.mutable.ListBuffer[Status]()
-  def receive = {
-    case status: Status => {
-      collected.append(status)
-      if (collected.length == 100) {
-        sender ! collected.toList
-        collected.clear
-      }
+      val replyName = status.getUser.getScreenName
+      val reply = "@" + replyName + " " + replyText
+      context.parent ! UpdateStatus(new StatusUpdate(reply).inReplyToStatusId(status.getId))
     }
   }
-}
 
+  val regex = """^(?:.* tweets )?(?:about \w+) (such as|like) (.*)""".r
+  val flippedRegex = """^(?:.* tweets )?(such as|like) (.*) (?:about \w+)""".r
 
-
-// The LuceneWriter actor extracts the content of each tweet, removes
-// the RT and mentions from the front and selects only tweets
-// classified as not vulgar for indexing via Lucene.
-class LuceneWriter extends Actor with ActorLogging {
-
-  import tshrdlu.util.{English, Lucene}
-  import TwitterRegex._
-
-  def receive = {
-    case tweets: List[Status] => {
-	 val useableTweets = tweets
-      .map(_.getText)
-      .map {
-        case StripMentionsRE(rest) => rest
-        case x => x
-      }
-      .filterNot(_.contains('@'))
-      .filterNot(_.contains('/'))
-      .filter(tshrdlu.util.English.isEnglish)
-      .filter(tshrdlu.util.English.isSafe)
-	
-      Lucene.write(useableTweets)
-    }
+  def parse(status: Status): Option[Filter] = {
+    regex.findFirstMatchIn(status.getText).map({ m =>
+      Filter(m.group(1).split(" ").toSet, m.group(3).split(" ").toSet, status.getUser.getScreenName, m.group(2) == "such as")
+    }).orElse({
+      flippedRegex.findFirstMatchIn(status.getText).map({ m =>
+        Filter(m.group(3).split(" ").toSet, m.group(2).split(" ").toSet, status.getUser.getScreenName, m.group(1) == "such as")
+      })
+    })
   }
 }
-
 
 object TwitterRegex {
 
