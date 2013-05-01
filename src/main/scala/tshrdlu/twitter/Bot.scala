@@ -60,14 +60,18 @@ object Bot {
 class Bot extends Actor with ActorLogging {
   import Bot._
   import tshrdlu.twitter.LocationResolver
+  import tshrdlu.twitter.retweet._
 
   val username = new TwitterStreamFactory().getInstance.getScreenName
   val streamer = new Streamer(context.self)
 
   val twitter = new TwitterFactory().getInstance
   val replier = context.actorOf(Props[Replier], name = "Replier")
+  val retweeter = context.actorOf(Props[Retweeter], name = "Retweet")
+  val modelfactory = context.actorOf(Props[ModelFactory], name = "ModelFactory")
 
   override def preStart {
+    modelfactory ! RT(retweeter)
   }
 
   def receive = {
@@ -89,9 +93,14 @@ class Bot extends Actor with ActorLogging {
       if (replyName == username) {
         log.info("Replying to: " + status.getText)
         replier ! ReplyToStatus(status)
+      } else {
+        retweeter ! status
       }
+
     case Retweet(id) =>
       twitter.retweetStatus(id)
+    case filter: Filter =>
+      modelfactory ! filter
   }
 }
   
@@ -112,11 +121,11 @@ class Replier extends Actor with ActorLogging {
   def receive = {
     case ReplyToStatus(status) => {
       val text = status.getText
-      var replyText = ""
-      parse(status) match {
+      var replyText = parse(status) match {
         case Some(query) => {
-          replyText = "Working on it."
-          // querySetup ! query
+          context.parent ! query
+          val about = query.about.mkString(" ")
+          "Working on $about."
         }
         case None => "Sorry, I couldn't parse that."
       }
@@ -127,15 +136,15 @@ class Replier extends Actor with ActorLogging {
     }
   }
 
-  val regex = """^(?:.* tweets )?(?:about \w+) (such as|like) (.*)""".r
-  val flippedRegex = """^(?:.* tweets )?(such as|like) (.*) (?:about \w+)""".r
+  val regex = """(?:.* tweets )?(?:about (\w+)) (such as|like) (.*)""".r
+  val flippedRegex = """(?:.* tweets )?(such as|like) (.*) (?:about (\w+))""".r
 
   def parse(status: Status): Option[Filter] = {
     regex.findFirstMatchIn(status.getText).map({ m =>
-      Filter(m.group(1).split(" ").toSet, m.group(3).split(" ").toSet, status.getUser.getScreenName, m.group(2) == "such as")
+      Filter(m.group(1).split(" ").toSet.filterNot(_ == "#"), m.group(3).split(" ").toSet, status.getUser.getScreenName, m.group(2) == "such as")
     }).orElse({
       flippedRegex.findFirstMatchIn(status.getText).map({ m =>
-        Filter(m.group(3).split(" ").toSet, m.group(2).split(" ").toSet, status.getUser.getScreenName, m.group(1) == "such as")
+        Filter(m.group(3).split(" ").toSet.filterNot(_ == "#"), m.group(2).split(" ").toSet, status.getUser.getScreenName, m.group(1) == "such as")
       })
     })
   }
