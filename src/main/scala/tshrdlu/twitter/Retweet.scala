@@ -156,7 +156,7 @@ class ModelFactory extends Actor with ActorLogging {
   }
 
   def negative(about: Iterable[String], from: Iterable[String], amount: Int): Iterable[String] = {
-    val connected = from.flatMap(friendsOf(_)).map(_.getScreenName).toSet // add followers?
+    val connected = from.flatMap(friendsOf(_)).map(_.getScreenName).toSet ++ from // add followers?
     val query = new Query()
     query.setCount(100)
     query.setQuery(about.mkString(" "))
