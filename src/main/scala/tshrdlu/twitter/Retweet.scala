@@ -1,4 +1,6 @@
 package tshrdlu.twitter.retweet
+import akka.util.Timeout
+import scala.concurrent.duration._
 import tshrdlu.twitter._
 import tshrdlu.util._
 import tshrdlu.util.bridge._
@@ -7,10 +9,47 @@ import nak.NakContext._
 import nak.data._
 import akka.actor._
 import twitter4j._
+import akka.pattern._
+
+// Actor globals, shouldn't be too evil.
+object Actors {
+  var mf: ActorRef = null
+  var ds: ActorRef = null
+  var rt: ActorRef = null
+}
+
+object ModelKeys {
+  type ModelKey = Tuple2[Option[String], Set[String]]
+}
+import ModelKeys.ModelKey
 
 class Retweeter extends Actor with ActorLogging {
+  import Actors._
   import Bot._
-  val models = scala.collection.mutable.Map[Set[String], scala.collection.mutable.Map[Option[String], FeaturizedClassifier[String, String]]]()
+  // The Option is used to say that it's a global model, so the
+  // retweets don't go to a specific person.
+  type ModelsClass = scala.collection.mutable.Map[Set[String], scala.collection.mutable.Map[Option[String], FeaturizedClassifier[String, String]]]
+  val models: ModelsClass = scala.collection.mutable.Map[Set[String], scala.collection.mutable.Map[Option[String], FeaturizedClassifier[String, String]]]()
+  val modelFile = new java.io.File("models.dump")
+
+  // override def preStart {
+  //   if (modelFile.exists) {
+  //     log.info("loading up " + modelFile.toString)
+  //     models ++= scala.util.Marshal.load(io.Source.fromFile(modelFile).map(_.toByte).toArray)
+  //   } else {
+  //     self ! AddModel((None, Set("scala")), ScalaModel.classifier)
+  //   }
+  // }
+
+  // override def postStop {
+  //   if (models.size > 0) {
+  //     log.info("dumping to " + modelFile.toString)
+  //     import java.io._
+  //     val out = new FileOutputStream(modelFile)
+  //     out.write(scala.util.Marshal.dump(models))
+  //     out.flush
+  //   }
+  // }
 
   val streamer = new Streamer(context.self)
   def receive = {
@@ -18,13 +57,14 @@ class Retweeter extends Actor with ActorLogging {
       val text = status.getText
       val bot = context.parent
       val tagged = POSTagger(text)
-      log.info(s"Got: $tagged")
+      log.info(s"Got: $text")
       val interestingFor = models.keySet.filter(_.subsetOf(tagged.map(_.token.toLowerCase.filterNot(_ == "#")).toSet))
       interestingFor.foreach({ keywords =>
         models(keywords).foreach ({
           case (userOption, model) =>
             log.info(s"Evaluating $text for $keywords")
             if(relevant(status, model)) {
+              mf ! SaveTweet(status.getId, SavedTweet((userOption, keywords), text))
               userOption match {
                 case Some(user) => bot ! Bot.UpdateStatus(new StatusUpdate(s"@$user $text" take 140).inReplyToStatusId(status.getId))
                 case None => bot ! Bot.Retweet(status.getId)
@@ -33,13 +73,14 @@ class Retweeter extends Actor with ActorLogging {
         })
       })
     }
-    case AddModel(topic, user, model) => {
+    case AddModel(key, model) => {
+      val topic = key._2
+      val user = key._1
       log.info(s"Got model about $topic of $user")
       models.get(topic) match {
         case Some(map) => map += (user -> model)
         case None => models += (topic -> scala.collection.mutable.Map(user -> model))
       }
-      println(models)
       val query = new FilterQuery(0, Array[Long](), models.keys.map(_.mkString(" ")).toArray)
       log.info(s"Updating filter stream to $query")
       streamer.stream.filter(query)
@@ -55,32 +96,46 @@ class Retweeter extends Actor with ActorLogging {
   }
 }
 
-case class AddModel(topic: Set[String], user: Option[String], model: FeaturizedClassifier[String, String])
-case class BotModel(topic: Set[String], model: FeaturizedClassifier[String, String])
+case class AddModel(key: ModelKey, model: FeaturizedClassifier[String, String])
 case class RT(ref: ActorRef)
-class ModelFactory extends Actor {
+case class UpdateModel(key: ModelKey, tweets: List[String], label: String)
+class ModelFactory extends Actor with ActorLogging {
   import nak.liblinear.LiblinearConfig
   import tshrdlu.data.Grab._
   import scala.collection.JavaConverters._
-  var rt: ActorRef = context.parent
-
-  override def preStart = {
-    self ! BotModel(Set("scala"), ScalaModel.classifier)
-  }
+  val negativeExampleFactor = 20
+  implicit val timeout = Timeout(1 minute)
+  import context._
+  import Actors._
 
   def receive = {
-    case Filter(about, from, by, include) => {
+    case Filter(about, from, by) => {
       // Blocking makes handling rate limits easier.
       val pos = positive(about, from)
       val neg = negative(about, from, pos.size)
-      rt ! AddModel(about, Some(by), ScalaModel.train(about, pos, neg))
-    }
-    case BotModel(about, model) => {
-      rt ! AddModel(about, None, model)
+      train((Some(by), about), pos, neg)
     }
     case RT(ref) => {
       rt = ref
     }
+    case ImproveUpon(long: Long, label: String) => {
+      (ds ? LoadTweet(long)).mapTo[SavedTweet].foreach(x => self ! UpdateModel(x.key, List.fill(20)(x.text), label))
+    }
+    case UpdateModel(key, tweets, label) => {
+      (ds ? Load(key)).mapTo[Tuple2[List[String], List[String]]].map({
+        case (pos, neg) =>
+          label match {
+            case "positive" => train(key, pos ++ tweets, neg)
+            case "negative" => train(key, pos, neg ++ tweets)
+          }
+      })
+    }
+  }
+
+  def train(key: ModelKey, pos: Iterable[String], neg: Iterable[String]) {
+    log.info("training model on $key")
+    ds ! Save(key, (pos.toList, neg.toList))
+    rt ! AddModel(key, ScalaModel.train(key._2, pos, neg))
   }
 
   def positive(about: Iterable[String], from: Iterable[String]): Iterable[String] = {
@@ -98,13 +153,64 @@ class ModelFactory extends Actor {
   }
 }
 
+case class Save(key: ModelKey, pos_neg: Tuple2[List[String], List[String]])
+case class Load(key: ModelKey)
+case class SaveTweet(id: Long, savedTweet: SavedTweet)
+case class LoadTweet(id: Long)
+case class SavedTweet(key: ModelKey, text: String)
+class DataStore extends Actor with ActorLogging {
+  import scala.collection._
+  // This one I keep for improving so it doesn't need to refetch the status.
+  val retweeted = mutable.Map[Long, SavedTweet]()
+  // Positive / negative examples used.
+  val entries = mutable.Map[ModelKey, Tuple2[List[String], List[String]]]()
 
-trait Feature {
-  def apply(parsed: Iterable[Token]): Iterable[String]
+  def receive = {
+    case Save(key, pos_neg) => entries += (key -> pos_neg)
+    case Load(key) => sender ! entries.get(key)
+    case SaveTweet(id, savedTweet) => retweeted += (id -> savedTweet)
+    case LoadTweet(id) => sender ! retweeted(id)
+  }
+
+  val tweetFile = new java.io.File("tweets.dump")
+  val entriesFile = new java.io.File("entries.dump")
+
+  // override def preStart {
+  //   if (tweetFile.exists) {
+  //     log.info("loading up " + tweetFile.toString)
+  //     retweeted ++= scala.util.Marshal.load(io.Source.fromFile(tweetFile).map(_.toByte).toArray)
+  //   }
+  //   if (entriesFile.exists) {
+  //     log.info("loading up " + entriesFile.toString)
+  //     entries ++= scala.util.Marshal.load(io.Source.fromFile(entriesFile).map(_.toByte).toArray)
+  //   }
+  // }
+
+  // override def postStop {
+  //   import java.io._
+  //   if (retweeted.size > 0) {
+  //     val out = new FileOutputStream(tweetFile)
+  //     out.write(scala.util.Marshal.dump(retweeted))
+  //     out.flush
+  //   }
+  //   if (entries.size > 0) {
+  //     val out2 = new FileOutputStream(entriesFile)
+  //     out2.write(scala.util.Marshal.dump(entries))
+  //     out2.flush
+  //   }
+  // }
+
 }
 
+
 class FeatureCollector(about: Iterable[String]) extends Featurizer[String, String]{
-  val feats = List(Tokens, Tags, TokensnTags, TagBigrams, TokenBigrams)
+  val feats = List(
+    {(parsed: Iterable[Token]) => parsed.map(token => "token=" + token.token.toLowerCase)},
+    {(parsed: Iterable[Token]) => parsed.map(token => "tag=" + token.tag)},
+    {(parsed: Iterable[Token]) => parsed.map(token => "token+tag=" + token.token.toLowerCase + "+" + token.tag)},
+    {(parsed: Iterable[Token]) => parsed.sliding(2).map(list => list.map(_.tag).mkString("bigramTags=", "+", "")).toIterable},
+    {(parsed: Iterable[Token]) => parsed.sliding(2).map(list => list.map(_.token.toLowerCase).mkString("bigramTokens=", "+", "")).toIterable}
+  )
   val ignore = about.toSet
   def apply(raw: String) = {
     val parsed = POSTagger(raw)
@@ -112,25 +218,6 @@ class FeatureCollector(about: Iterable[String]) extends Featurizer[String, Strin
       _.apply(parsed.filterNot(item => ignore(item.token.toLowerCase))
       ).map(FeatureObservation(_)))
   }
-}
-object Tokens extends Feature {
-  def apply(parsed: Iterable[Token]): Iterable[String] = parsed.map(token => "token=" + token.token.toLowerCase)
-}
-
-object Tags extends Feature {
-  def apply(parsed: Iterable[Token]): Iterable[String] = parsed.map(token => "tag=" + token.tag)
-}
-
-object TokensnTags extends Feature {
-  def apply(parsed: Iterable[Token]): Iterable[String] = parsed.map(token => "token+tag=" + token.token.toLowerCase + "+" + token.tag)
-}
-
-object TagBigrams extends Feature {
-  def apply(parsed: Iterable[Token]): Iterable[String] = parsed.sliding(2).map(list => list.map(_.tag).mkString("bigramTags=", "+", "")).toIterable
-}
-
-object TokenBigrams extends Feature {
-  def apply(parsed: Iterable[Token]): Iterable[String] = parsed.sliding(2).map(list => list.map(_.token.toLowerCase).mkString("bigramTokens=", "+", "")).toIterable
 }
 
 import spray.json._

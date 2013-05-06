@@ -23,6 +23,7 @@ libraryDependencies ++= Seq(
   "org.scalanlp" % "nak" % "1.1.1",
   "com.typesafe.akka" %% "akka-actor" % "2.1.2",
   "commons-codec" % "commons-codec" % "1.7",
+  "org.apache.commons" % "commons-compress" % "1.0",
   "org.apache.lucene" % "lucene-core" % "4.2.0",
   "org.apache.lucene" % "lucene-analyzers-common" % "4.2.0",
   "org.apache.lucene" % "lucene-queryparser" % "4.2.0",
@@ -33,4 +34,4 @@ libraryDependencies ++= Seq(
   "io.spray" %%  "spray-json" % "1.2.3"
 )
 
-initialCommands in console := "import tshrdlu.repl._\nReplBot.setup\nprintln(\"***\")\nprintln(\"To activate repliers, call ReplBot.loadReplier(name). See Bot.scala for names.\")\nprintln(\"call ReplBot.sendTweet(text) or its overloads.\")\nprintln(\"***\")"
+//initialCommands in console := "import tshrdlu.repl._\nReplBot.setup\nprintln(\"***\")\nprintln(\"To activate repliers, call ReplBot.loadReplier(name). See Bot.scala for names.\")\nprintln(\"call ReplBot.sendTweet(text) or its overloads.\")\nprintln(\"***\")"

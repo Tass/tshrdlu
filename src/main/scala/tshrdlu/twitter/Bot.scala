@@ -69,6 +69,10 @@ class Bot extends Actor with ActorLogging {
   val replier = context.actorOf(Props[Replier], name = "Replier")
   val retweeter = context.actorOf(Props[Retweeter], name = "Retweet")
   val modelfactory = context.actorOf(Props[ModelFactory], name = "ModelFactory")
+  val datastore = context.actorOf(Props[DataStore], name = "DataStore")
+  Actors.mf = modelfactory
+  Actors.rt = retweeter
+  Actors.ds = datastore
 
   override def preStart {
     modelfactory ! RT(retweeter)
@@ -101,10 +105,13 @@ class Bot extends Actor with ActorLogging {
       twitter.retweetStatus(id)
     case filter: Filter =>
       modelfactory ! filter
+    case improve: ImproveUpon =>
+      modelfactory ! improve
   }
 }
-  
-case class Filter(about: Set[String], from: Set[String], by: String, include: Boolean)
+
+case class Filter(about: Set[String], from: Set[String], by: String)
+case class ImproveUpon(tweetId: Long, label: String)
 class Replier extends Actor with ActorLogging {
   import Bot._
 
@@ -117,6 +124,7 @@ class Replier extends Actor with ActorLogging {
   implicit val timeout = Timeout(10 seconds)
 
   lazy val random = new scala.util.Random
+  val no = """(?i)no[!.]?|bad bot!?""".r
 
   def receive = {
     case ReplyToStatus(status) => {
@@ -125,9 +133,19 @@ class Replier extends Actor with ActorLogging {
         case Some(query) => {
           context.parent ! query
           val about = query.about.mkString(" ")
-          "Working on $about."
+          s"Working on $about."
         }
-        case None => "Sorry, I couldn't parse that."
+        case None => text match {
+          case no() =>
+            Option(status.getInReplyToStatusId) match {
+              case Some(statusId) =>
+                context.parent ! ImproveUpon(statusId, "negative")
+                "Sorry, I'll not make that mistake again."
+              case None =>
+                "Please reply to the tweet in question so I can improve."
+            }
+          case _ => "Sorry, I couldn't parse that. Try `tweets about scala like etorreborre jasonbaldridge`."
+        }
       }
 
       val replyName = status.getUser.getScreenName
@@ -141,10 +159,10 @@ class Replier extends Actor with ActorLogging {
 
   def parse(status: Status): Option[Filter] = {
     regex.findFirstMatchIn(status.getText).map({ m =>
-      Filter(m.group(1).split(" ").toSet.filterNot(_ == "#"), m.group(3).split(" ").toSet, status.getUser.getScreenName, m.group(2) == "such as")
+      Filter(m.group(1).split(" ").toSet.filterNot(_ == "#"), m.group(3).split(" ").toSet, status.getUser.getScreenName) // m.group(2) == "such as")
     }).orElse({
       flippedRegex.findFirstMatchIn(status.getText).map({ m =>
-        Filter(m.group(3).split(" ").toSet.filterNot(_ == "#"), m.group(2).split(" ").toSet, status.getUser.getScreenName, m.group(1) == "such as")
+        Filter(m.group(3).split(" ").toSet.filterNot(_ == "#"), m.group(2).split(" ").toSet, status.getUser.getScreenName) // m.group(1) == "such as")
       })
     })
   }
