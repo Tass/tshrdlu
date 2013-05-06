@@ -71,9 +71,9 @@ object RetweetTester {
     val twitter = (new TwitterFactory).getInstance()
     Actors.mf ! Filter(Set("scala"), Set("etorreborre", "jasonbaldridge"), "reactormonk")
     val query = new Query("scala")
-    query.count(30)
+    query.count(100)
     val result = twitter.search(query)
-    val statuses = result.getTweets.asScala
+    val statuses = result.getTweets.asScala.filter(_.getText.toLowerCase.contains("scala")).take(30)
     val iterations = statuses.grouped(10)
     // Nice n hacky way to wait until it's trained.
     Await.result(Actors.mf ? Ping, 1 minute)
