@@ -23,14 +23,17 @@ object ModelKeys {
 }
 import ModelKeys.ModelKey
 
+case class Relevant(key: ModelKey, status:Status)
 class Retweeter extends Actor with ActorLogging {
   import Actors._
   import Bot._
   // The Option is used to say that it's a global model, so the
   // retweets don't go to a specific person.
   type ModelsClass = scala.collection.mutable.Map[Set[String], scala.collection.mutable.Map[Option[String], FeaturizedClassifier[String, String]]]
+  // Topics first, then User.
   val models: ModelsClass = scala.collection.mutable.Map[Set[String], scala.collection.mutable.Map[Option[String], FeaturizedClassifier[String, String]]]()
   val modelFile = new java.io.File("models.dump")
+  val config = Settings(context.system)
 
   // override def preStart {
   //   if (modelFile.exists) {
@@ -51,7 +54,8 @@ class Retweeter extends Actor with ActorLogging {
   //   }
   // }
 
-  val streamer = new Streamer(context.self)
+  // Global here. Somewhat ugly.
+  lazy val streamer = new Streamer(context.self)
   def receive = {
     case status: Status => {
       val text = status.getText
@@ -73,6 +77,10 @@ class Retweeter extends Actor with ActorLogging {
         })
       })
     }
+    case Relevant(key, status) => {
+      ds ! SaveTweet(status.getId, SavedTweet(key, status.getText))
+      sender ! relevant(status, models(key._2)(key._1))
+    }
     case AddModel(key, model) => {
       val topic = key._2
       val user = key._1
@@ -81,9 +89,11 @@ class Retweeter extends Actor with ActorLogging {
         case Some(map) => map += (user -> model)
         case None => models += (topic -> scala.collection.mutable.Map(user -> model))
       }
-      val query = new FilterQuery(0, Array[Long](), models.keys.map(_.mkString(" ")).toArray)
-      log.info(s"Updating filter stream to $query")
-      streamer.stream.filter(query)
+      if (config.SetupStream) {
+        val query = new FilterQuery(0, Array[Long](), models.keys.map(_.mkString(" ")).toArray)
+        log.info(s"Updating filter stream to $query")
+        streamer.stream.filter(query)
+      }
     }
   }
 
@@ -99,6 +109,8 @@ class Retweeter extends Actor with ActorLogging {
 case class AddModel(key: ModelKey, model: FeaturizedClassifier[String, String])
 case class RT(ref: ActorRef)
 case class UpdateModel(key: ModelKey, tweets: List[String], label: String)
+case class Ping()
+case class Pong()
 class ModelFactory extends Actor with ActorLogging {
   import nak.liblinear.LiblinearConfig
   import tshrdlu.data.Grab._
@@ -130,10 +142,11 @@ class ModelFactory extends Actor with ActorLogging {
           }
       })
     }
+    case Ping => sender ! Pong
   }
 
   def train(key: ModelKey, pos: Iterable[String], neg: Iterable[String]) {
-    log.info("training model on $key")
+    log.info(s"training model on $key")
     ds ! Save(key, (pos.toList, neg.toList))
     rt ! AddModel(key, ScalaModel.train(key._2, pos, neg))
   }

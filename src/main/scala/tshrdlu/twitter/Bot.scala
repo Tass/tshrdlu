@@ -129,8 +129,9 @@ class Replier extends Actor with ActorLogging {
   def receive = {
     case ReplyToStatus(status) => {
       val text = status.getText
-      var replyText = parse(status) match {
+      val replyText = parse(status) match {
         case Some(query) => {
+          // Add validation of the usernames
           context.parent ! query
           val about = query.about.mkString(" ")
           s"Working on $about."
