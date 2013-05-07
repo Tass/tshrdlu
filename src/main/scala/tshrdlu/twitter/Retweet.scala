@@ -34,6 +34,7 @@ class Retweeter extends Actor with ActorLogging {
   val models: ModelsClass = scala.collection.mutable.Map[Set[String], scala.collection.mutable.Map[Option[String], FeaturizedClassifier[String, String]]]()
   val modelFile = new java.io.File("models.dump")
   val config = Settings(context.system)
+  val username = new TwitterStreamFactory().getInstance.getScreenName
 
   // override def preStart {
   //   if (modelFile.exists) {
@@ -60,20 +61,22 @@ class Retweeter extends Actor with ActorLogging {
       val bot = context.parent
       val tagged = POSTagger(text)
       log.info(s"Got: $text")
-      val interestingFor = models.keySet.filter(_.subsetOf(tagged.map(_.token.toLowerCase.filterNot(_ == "#")).toSet))
-      interestingFor.foreach({ keywords =>
-        models(keywords).foreach ({
-          case (userOption, model) =>
-            log.info(s"Evaluating $text for $keywords")
-            if(relevant(status, model)) {
-              mf ! SaveTweet(status.getId, SavedTweet((userOption, keywords), text))
-              userOption match {
-                case Some(user) => bot ! Bot.UpdateStatus(new StatusUpdate(s"@$user $text" take 140).inReplyToStatusId(status.getId))
-                case None => bot ! Bot.Retweet(status.getId)
+      if (!text.startsWith("@" + username)) {
+        val interestingFor = models.keySet.filter(_.subsetOf(tagged.map(_.token.toLowerCase.filterNot(_ == "#")).toSet))
+        interestingFor.foreach({ keywords =>
+          models(keywords).foreach ({
+            case (userOption, model) =>
+              log.info(s"Evaluating $text for $keywords")
+              if(relevant(status, model)) {
+                mf ! SaveTweet(status.getId, SavedTweet((userOption, keywords), text))
+                userOption match {
+                  case Some(user) => bot ! Bot.UpdateStatus(new StatusUpdate(s"@$user $text" take 140).inReplyToStatusId(status.getId))
+                  case None => bot ! Bot.Retweet(status.getId)
+                }
               }
-            }
+          })
         })
-      })
+      }
     }
     case Relevant(key, status) => {
       ds ! SaveTweet(status.getId, SavedTweet(key, status.getText))
