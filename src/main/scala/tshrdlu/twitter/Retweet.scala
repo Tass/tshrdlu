@@ -61,7 +61,7 @@ class Retweeter extends Actor with ActorLogging {
       val bot = context.parent
       val tagged = POSTagger(text)
       log.info(s"Got: $text")
-      if (!text.startsWith("@" + username)) {
+      if (!text.contains("@" + username)) {
         val interestingFor = models.keySet.filter(_.subsetOf(tagged.map(_.token.toLowerCase.filterNot(_ == "#")).toSet))
         interestingFor.foreach({ keywords =>
           models(keywords).foreach ({
