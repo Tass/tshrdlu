@@ -17,6 +17,7 @@ package tshrdlu.twitter
  */
 
 import akka.actor._
+import com.typesafe.config.ConfigFactory
 import twitter4j._
 import collection.JavaConversions._
 import tshrdlu.util.bridge._
@@ -42,7 +43,8 @@ object Bot {
   case class Retweet(id: Long)
 
   def main (args: Array[String]) {
-    val system = ActorSystem("TwitterBot")
+    val config = ConfigFactory.load()
+    val system = ActorSystem("TwitterBot", config.getConfig("twitter"))
     val bot = system.actorOf(Props[Bot], name = "Bot")
     bot ! Start
   }

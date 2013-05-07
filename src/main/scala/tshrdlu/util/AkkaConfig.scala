@@ -7,7 +7,7 @@ import com.typesafe.config.Config
 import java.util.concurrent.TimeUnit
  
 class SettingsImpl(config: Config) extends Extension {
-  val SetupStream: Boolean = config.getString("retweeter.setupstream") == true
+  val SetupStream: Boolean = config.getString("retweeter.setupstream") == "true"
 }
 object Settings extends ExtensionId[SettingsImpl] with ExtensionIdProvider {
  
