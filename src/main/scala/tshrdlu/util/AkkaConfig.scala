@@ -6,6 +6,8 @@ import akka.actor.ExtendedActorSystem
 import com.typesafe.config.Config
 import java.util.concurrent.TimeUnit
  
+// Loads configs from application.conf. Currently used to check if the
+// retweeter should ask twitter for tweets.
 class SettingsImpl(config: Config) extends Extension {
   val SetupStream: Boolean = config.getString("retweeter.setupstream") == "true"
 }

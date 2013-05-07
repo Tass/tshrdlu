@@ -19,11 +19,17 @@ object Actors {
 }
 
 object ModelKeys {
+  // Uniquely identifies each model. The Option is a username or None
+  // if the model is used for user-independent models (like the scala
+  // one). The Set is the set of topics used. Will likely crash if the
+  // set is empty. Make sure it isn't.
   type ModelKey = Tuple2[Option[String], Set[String]]
 }
 import ModelKeys.ModelKey
 
 case class Relevant(key: ModelKey, status:Status)
+// This Actor handles if a tweet should be retweeted (or replied to
+// with @user).
 class Retweeter extends Actor with ActorLogging {
   import Actors._
   import Bot._
@@ -61,7 +67,10 @@ class Retweeter extends Actor with ActorLogging {
       val bot = context.parent
       val tagged = POSTagger(text)
       log.info(s"Got: $text")
-      if (!text.contains("@" + username)) {
+      if (!text.contains("@" + username) && status.getUser.getScreenName != username) {
+        // This intersects tokens with the keywords for the models. If
+        // all of the keywords are found, the tweet is interesting for
+        // the model.
         val interestingFor = models.keySet.filter(_.subsetOf(tagged.map(_.token.toLowerCase.filterNot(_ == "#")).toSet))
         interestingFor.foreach({ keywords =>
           models(keywords).foreach ({
@@ -78,10 +87,13 @@ class Retweeter extends Actor with ActorLogging {
         })
       }
     }
+    // Used for RetweetTester
     case Relevant(key, status) => {
       ds ! SaveTweet(status.getId, SavedTweet(key, status.getText))
       sender ! relevant(status, models(key._2)(key._1))
     }
+    // A new model should be added to the stream. Expects the model to
+    // be trained.
     case AddModel(key, model) => {
       val topic = key._2
       val user = key._1
@@ -115,6 +127,7 @@ case class RT(ref: ActorRef)
 case class UpdateModel(key: ModelKey, tweets: List[String], label: String)
 case class Ping()
 case class Pong()
+// Create new models and passes them on to the retweet actor.
 class ModelFactory extends Actor with ActorLogging {
   import nak.liblinear.LiblinearConfig
   import tshrdlu.data.Grab._
@@ -125,18 +138,23 @@ class ModelFactory extends Actor with ActorLogging {
   import Actors._
 
   def receive = {
+    // Create a new model based on a filter and pass it on to the retweeter.
     case Filter(about, from, by) => {
       // Blocking makes handling rate limits easier.
       val pos = positive(about, from)
       val neg = negative(about, from, pos.size)
       train((Some(by), about), pos, neg)
     }
+    // Set the retweeter.
     case RT(ref) => {
       rt = ref
     }
+    // A certain tweet with id long has been responded to with positive/negative.
     case ImproveUpon(long: Long, label: String) => {
       (ds ? LoadTweet(long)).mapTo[SavedTweet].foreach(x => self ! UpdateModel(x.key, List.fill(20)(x.text), label))
     }
+    // Used by ImproveUpon currently. May be used independently later
+    // on if more tweets are fetched for a model.
     case UpdateModel(key, tweets, label) => {
       (ds ? Load(key)).mapTo[Tuple2[List[String], List[String]]].map({
         case (pos, neg) =>
@@ -146,6 +164,9 @@ class ModelFactory extends Actor with ActorLogging {
           }
       })
     }
+    // To wait for models to be trained. Send this message and wait
+    // for it to return, you will then know the message queue has been
+    // worked through so far.
     case Ping => sender ! Pong
   }
 
@@ -175,6 +196,8 @@ case class Load(key: ModelKey)
 case class SaveTweet(id: Long, savedTweet: SavedTweet)
 case class LoadTweet(id: Long)
 case class SavedTweet(key: ModelKey, text: String)
+// A Simple n Stupid datastore so models can be retrained. Might be
+// replaced with something more sophisticated in the future.
 class DataStore extends Actor with ActorLogging {
   import scala.collection._
   // This one I keep for improving so it doesn't need to refetch the status.
@@ -220,6 +243,8 @@ class DataStore extends Actor with ActorLogging {
 }
 
 
+// Handles the feature stuff in the models. Splits a tweet into
+// tokens, then features. Currently ignores the keyword.
 class FeatureCollector(about: Iterable[String]) extends Featurizer[String, String]{
   val feats = List(
     {(parsed: Iterable[Token]) => parsed.map(token => "token=" + token.token.toLowerCase)},

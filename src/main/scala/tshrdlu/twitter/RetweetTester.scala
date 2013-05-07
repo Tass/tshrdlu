@@ -12,6 +12,7 @@ import tshrdlu.repl._
 import akka.util.Timeout
 import scala.concurrent.duration._
 
+// Command-line bot usage. Fire up to evaluate the models.
 object RetweetTester {
   class FakeBot extends Actor with ActorLogging {
     override def preStart {
@@ -54,12 +55,15 @@ object RetweetTester {
     mf ! Filter(about, from, by)
   }
 
+  // Send a fake tweet. Returns the ID of the tweet sent.
   var id: Long = 0
-  def classifyTweet(text: String) {
+  def classifyTweet(text: String): Long = {
     rt ! FakeStatus(id, text, "thedoctor")
     id += 1
+    id - 1
   }
 
+  // Load up the interactive evaluator.
   import twitter4j._
   def main(args: Array[String]) {
     import scala.collection.JavaConversions._
@@ -88,6 +92,8 @@ object RetweetTester {
     })
   }
 
+  // Contains all the messy logic to ask the user and evaluate. The
+  // readline should be factored out..
   def evaluate(tweets: List[Status]): Option[Tuple2[Status, String]] = {
     import scala.concurrent.ExecutionContext.Implicits.global
     implicit val timeout = Timeout(1 minute)
@@ -169,6 +175,7 @@ object RetweetTester {
         case _: EOFException => None 
     } 
 
+  // Int parsing stuff.
   def getValue(s: String): Option[Int] = s match {
     case "inf" => Some(Integer.MAX_VALUE)
     case Int(x) => Some(x)
@@ -176,6 +183,7 @@ object RetweetTester {
   }
 }
 
+// Int parsing stuff.
 object Int {
   def unapply(s : String) : Option[Int] = try {
     Some(s.toInt)
