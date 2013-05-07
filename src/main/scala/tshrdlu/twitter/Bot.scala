@@ -40,6 +40,7 @@ object Bot {
   case class ReplyToStatus(status: Status)
   case class SearchTwitter(query: Query)
   case class UpdateStatus(update: StatusUpdate)
+  case class UpdateRetweet(key: tshrdlu.twitter.retweet.ModelKeys.ModelKey, status: StatusUpdate)
   case class Retweet(id: Long)
 
   def main (args: Array[String]) {
@@ -95,6 +96,11 @@ class Bot extends Actor with ActorLogging {
       log.info("Posting update: " + update.getStatus)
       twitter.updateStatus(update)
 
+    case UpdateRetweet(key, update) =>
+      log.info("Posting retweet: " + update.getStatus)
+      val status = twitter.updateStatus(update)
+      datastore ! SaveTweet(status.getId, SavedTweet(key, status.getText))
+
     case status: Status =>
       log.info("New status: " + status.getText)
       val replyName = status.getInReplyToScreenName
@@ -128,7 +134,7 @@ class Replier extends Actor with ActorLogging {
   implicit val timeout = Timeout(10 seconds)
 
   lazy val random = new scala.util.Random
-  val no = """(?i)no[!.]?|bad bot!?""".r
+  val no = """(?i).*(?:no[!.]?|bad bot!?)""".r
 
   def receive = {
     case ReplyToStatus(status) => {
@@ -142,12 +148,12 @@ class Replier extends Actor with ActorLogging {
         }
         case None => text match {
           case no() =>
-            Option(status.getInReplyToStatusId) match {
-              case Some(statusId) =>
+            status.getInReplyToStatusId match {
+              case -1 =>
+                "Please reply to the tweet in question so I can improve."
+              case statusId =>
                 context.parent ! ImproveUpon(statusId, "negative")
                 "Sorry, I'll not make that mistake again."
-              case None =>
-                "Please reply to the tweet in question so I can improve."
             }
           case _ => "Sorry, I couldn't parse that. Try `tweets about scala like etorreborre jasonbaldridge`."
         }

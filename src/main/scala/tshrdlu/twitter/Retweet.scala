@@ -71,16 +71,18 @@ class Retweeter extends Actor with ActorLogging {
         // This intersects tokens with the keywords for the models. If
         // all of the keywords are found, the tweet is interesting for
         // the model.
-        val interestingFor = models.keySet.filter(_.subsetOf(tagged.map(_.token.toLowerCase.filterNot(_ == "#")).toSet))
+        val interestingFor = models.keySet.filter(_.forall(text.toLowerCase.contains(_)))
         interestingFor.foreach({ keywords =>
           models(keywords).foreach ({
             case (userOption, model) =>
               log.info(s"Evaluating $text for $keywords")
               if(relevant(status, model)) {
-                mf ! SaveTweet(status.getId, SavedTweet((userOption, keywords), text))
+                val key = (userOption, keywords)
                 userOption match {
-                  case Some(user) => bot ! Bot.UpdateStatus(new StatusUpdate(s"@$user $text" take 140).inReplyToStatusId(status.getId))
-                  case None => bot ! Bot.Retweet(status.getId)
+                  case Some(user) => bot ! Bot.UpdateRetweet(key, new StatusUpdate(s"@$user $text" take 140).inReplyToStatusId(status.getId))
+                  case None =>
+                    val response = (if (text.startsWith("RT")) {text} else {"RT " + text}) take 140
+                    bot ! Bot.UpdateRetweet(key, new StatusUpdate(response).inReplyToStatusId(status.getId))
                 }
               }
           })
@@ -151,6 +153,7 @@ class ModelFactory extends Actor with ActorLogging {
     }
     // A certain tweet with id long has been responded to with positive/negative.
     case ImproveUpon(long: Long, label: String) => {
+      log.info(s"Improving upon $long")
       (ds ? LoadTweet(long)).mapTo[SavedTweet].foreach(x => self ! UpdateModel(x.key, List.fill(20)(x.text), label))
     }
     // Used by ImproveUpon currently. May be used independently later
@@ -161,6 +164,7 @@ class ModelFactory extends Actor with ActorLogging {
           label match {
             case "positive" => train(key, pos ++ tweets, neg)
             case "negative" => train(key, pos, neg ++ tweets)
+            case _ => log.error(s"Unknown label $label")
           }
       })
     }
@@ -208,7 +212,7 @@ class DataStore extends Actor with ActorLogging {
   def receive = {
     case Save(key, pos_neg) => entries += (key -> pos_neg)
     case Load(key) => sender ! entries.get(key)
-    case SaveTweet(id, savedTweet) => retweeted += (id -> savedTweet)
+    case SaveTweet(id, savedTweet) => println(id); retweeted += (id -> savedTweet)
     case LoadTweet(id) => sender ! retweeted(id)
   }
 
