@@ -66,8 +66,8 @@ class Retweeter extends Actor with ActorLogging {
       val text = status.getText
       val bot = context.parent
       val tagged = POSTagger(text)
-      log.info(s"Got: $text")
       if (!text.contains("@" + username) && status.getUser.getScreenName != username) {
+        log.info(s"Got: $text")
         // This intersects tokens with the keywords for the models. If
         // all of the keywords are found, the tweet is interesting for
         // the model.
