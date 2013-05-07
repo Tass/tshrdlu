@@ -39,8 +39,6 @@ class Retweeter extends Actor with ActorLogging {
   //   if (modelFile.exists) {
   //     log.info("loading up " + modelFile.toString)
   //     models ++= scala.util.Marshal.load(io.Source.fromFile(modelFile).map(_.toByte).toArray)
-  //   } else {
-  //     self ! AddModel((None, Set("scala")), ScalaModel.classifier)
   //   }
   // }
 

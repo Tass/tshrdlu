@@ -76,6 +76,8 @@ class Bot extends Actor with ActorLogging {
 
   override def preStart {
     modelfactory ! RT(retweeter)
+    // Add the bot model for scala
+    retweeter ! AddModel((None, Set("scala")), ScalaModel.classifier)
   }
 
   def receive = {
