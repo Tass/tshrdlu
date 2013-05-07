@@ -95,6 +95,9 @@ class Retweeter extends Actor with ActorLogging {
         log.info(s"Updating filter stream to $query")
         streamer.stream.filter(query)
       }
+      val bot = context.parent
+      val topics = topic.mkString(" ")
+      user.foreach({ u => bot ! Bot.UpdateStatus(new StatusUpdate(s"@$u ready to tweet about $topics"))})
     }
   }
 
