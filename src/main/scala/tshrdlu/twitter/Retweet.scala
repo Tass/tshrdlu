@@ -109,7 +109,7 @@ class Retweeter extends Actor with ActorLogging {
       }
       val bot = context.parent
       val topics = topic.mkString(" ")
-      user.foreach({ u => bot ! Bot.UpdateStatus(new StatusUpdate(s"@$u ready to tweet about $topics"))})
+      user.foreach({ u => bot ! Bot.UpdateStatus(new StatusUpdate(s"@$u Ready to tweet about $topics"))})
     }
   }
 
