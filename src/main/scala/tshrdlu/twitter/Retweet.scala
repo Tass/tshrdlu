@@ -118,7 +118,7 @@ class Retweeter extends Actor with ActorLogging {
     val positive = result(model.indexOfLabel("positive"))
     val negative = result(model.indexOfLabel("negative"))
     log.info(s"positive: $positive, negative: $negative")
-    positive > 0.8
+    positive > 0.6
   }
 }
 
