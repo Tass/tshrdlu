@@ -30,7 +30,7 @@ import ModelKeys.ModelKey
 case class Relevant(key: ModelKey, status:Status)
 // This Actor handles if a tweet should be retweeted (or replied to
 // with @user).
-class Retweeter extends Actor with ActorLogging {
+class Retweeter extends Actor with ActorLogging with PersistentMap {
   import Actors._
   import Bot._
   // The Option is used to say that it's a global model, so the
@@ -42,22 +42,13 @@ class Retweeter extends Actor with ActorLogging {
   val config = Settings(context.system)
   val username = new TwitterStreamFactory().getInstance.getScreenName
 
-  // override def preStart {
-  //   if (modelFile.exists) {
-  //     log.info("loading up " + modelFile.toString)
-  //     models ++= scala.util.Marshal.load(io.Source.fromFile(modelFile).map(_.toByte).toArray)
-  //   }
-  // }
+  override def preStart {
+    load(models, modelFile)
+  }
 
-  // override def postStop {
-  //   if (models.size > 0) {
-  //     log.info("dumping to " + modelFile.toString)
-  //     import java.io._
-  //     val out = new FileOutputStream(modelFile)
-  //     out.write(scala.util.Marshal.dump(models))
-  //     out.flush
-  //   }
-  // }
+  override def postStop {
+    save(models, modelFile)
+  }
 
   // Global here. Somewhat ugly.
   lazy val streamer = new Streamer(context.self)
@@ -202,7 +193,7 @@ case class LoadTweet(id: Long)
 case class SavedTweet(key: ModelKey, text: String)
 // A Simple n Stupid datastore so models can be retrained. Might be
 // replaced with something more sophisticated in the future.
-class DataStore extends Actor with ActorLogging {
+class DataStore extends Actor with ActorLogging with PersistentMap {
   import scala.collection._
   // This one I keep for improving so it doesn't need to refetch the status.
   val retweeted = mutable.Map[Long, SavedTweet]()
@@ -219,30 +210,15 @@ class DataStore extends Actor with ActorLogging {
   val tweetFile = new java.io.File("tweets.dump")
   val entriesFile = new java.io.File("entries.dump")
 
-  // override def preStart {
-  //   if (tweetFile.exists) {
-  //     log.info("loading up " + tweetFile.toString)
-  //     retweeted ++= scala.util.Marshal.load(io.Source.fromFile(tweetFile).map(_.toByte).toArray)
-  //   }
-  //   if (entriesFile.exists) {
-  //     log.info("loading up " + entriesFile.toString)
-  //     entries ++= scala.util.Marshal.load(io.Source.fromFile(entriesFile).map(_.toByte).toArray)
-  //   }
-  // }
+  override def preStart {
+    load(retweeted, tweetFile)
+    load(entries, entriesFile)
+  }
 
-  // override def postStop {
-  //   import java.io._
-  //   if (retweeted.size > 0) {
-  //     val out = new FileOutputStream(tweetFile)
-  //     out.write(scala.util.Marshal.dump(retweeted))
-  //     out.flush
-  //   }
-  //   if (entries.size > 0) {
-  //     val out2 = new FileOutputStream(entriesFile)
-  //     out2.write(scala.util.Marshal.dump(entries))
-  //     out2.flush
-  //   }
-  // }
+  override def postStop {
+    save(retweeted, tweetFile)
+    save(entries, entriesFile)
+  }
 
 }
 
@@ -297,5 +273,25 @@ object ScalaModel {
 
   def featurizer(about: Iterable[String]): Featurizer[String, String] = {
     new FeatureCollector(about)
+  }
+}
+
+trait PersistentMap {
+  import scala.collection.mutable._
+  import java.io._
+  def save[T, U](map: Map[T, U], to: File) {
+	val oos = new ObjectOutputStream(new FileOutputStream(to))
+    oos.writeObject(map)
+    oos.close()
+  }
+
+  def load[T, U](map: Map[T, U], from: File) {
+    if(from.exists) {
+      val ois = new ObjectInputStream(new FileInputStream(from))
+      ois.readObject match {
+        case mappy: Map[T, U] => map ++= mappy
+        case null => // ignore
+      }
+    }
   }
 }

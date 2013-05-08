@@ -31,6 +31,7 @@ libraryDependencies ++= Seq(
   "org.scalanlp" % "chalk" % "1.1.3-SNAPSHOT",
   "org.scalanlp" % "nak" % "1.1.3-SNAPSHOT",
   "edu.cmu.cs" % "ark-tweet-nlp" % "0.3.2",
+  "org.scalatest" %% "scalatest" % "1.9.1" % "test",
   "io.spray" %%  "spray-json" % "1.2.3"
 )
 
