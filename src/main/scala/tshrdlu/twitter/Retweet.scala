@@ -120,6 +120,7 @@ case class RT(ref: ActorRef)
 case class UpdateModel(key: ModelKey, tweets: List[String], label: String)
 case class Ping()
 case class Pong()
+case class SqueezeRateLimit
 // Create new models and passes them on to the retweet actor.
 class ModelFactory extends Actor with ActorLogging {
   import nak.liblinear.LiblinearConfig
@@ -127,8 +128,10 @@ class ModelFactory extends Actor with ActorLogging {
   import scala.collection.JavaConverters._
   val negativeExampleFactor = 20
   implicit val timeout = Timeout(1 minute)
+  val rateLimitWindow = 15 minutes
   import context._
   import Actors._
+  var squeezer = system.scheduler.schedule(10 minutes, 15 minutes, self, SqueezeRateLimit)
 
   def receive = {
     // Create a new model based on a filter and pass it on to the retweeter.
@@ -183,6 +186,11 @@ class ModelFactory extends Actor with ActorLogging {
     val found = twitter.search(query).getTweets.asScala.map(_.getUser.getScreenName).toSet
     val candidates = found -- connected
     candidates.take(amount/200).flatMap(fetch(_)).map(_.getText)
+  }
+
+  def rescheduleSqueezer(seconds: Int) {
+    squeezer.cancel()
+    squeezer = system.scheduler.schedule(seconds seconds, 15 minutes, self, SqueezeRateLimit)
   }
 }
 
