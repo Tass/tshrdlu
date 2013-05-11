@@ -20,7 +20,9 @@ import akka.actor._
 import com.typesafe.config.ConfigFactory
 import twitter4j._
 import collection.JavaConversions._
+import collection.JavaConverters._
 import tshrdlu.util.bridge._
+import scala.concurrent.duration._
 
 /**
  * An object to define the message types that the actors in the bot use for
@@ -42,6 +44,10 @@ object Bot {
   case class UpdateStatus(update: StatusUpdate)
   case class UpdateRetweet(key: tshrdlu.twitter.retweet.ModelKeys.ModelKey, status: StatusUpdate)
   case class Retweet(id: Long)
+  case class FetchTweets(userId: Long, pages: Int, minId: Long, maxId: Long) // one page is 200 tweets
+  case class FetchFriends(user: String) // 5000 a piece. Should be enough. List[Long]
+  case class FetchIds(users: List[String])          // returns List[Long]
+  case class FetchViaQuery(about: Iterable[String]) // returns List[Status]
 
   def main (args: Array[String]) {
     val config = ConfigFactory.load()
@@ -120,8 +126,6 @@ class Bot extends Actor with ActorLogging {
   }
 }
 
-case class Filter(about: Set[String], from: Set[String], by: String)
-case class ImproveUpon(tweetId: Long, label: String)
 class Replier extends Actor with ActorLogging {
   import Bot._
 
@@ -131,6 +135,7 @@ class Replier extends Actor with ActorLogging {
   import scala.concurrent.duration._
   import scala.concurrent.Future
   import scala.util.{Success,Failure}
+  import tshrdlu.twitter.retweet.Labels._
   implicit val timeout = Timeout(10 seconds)
 
   lazy val random = new scala.util.Random
@@ -141,7 +146,7 @@ class Replier extends Actor with ActorLogging {
       val text = status.getText
       val replyText = parse(status) match {
         case Some(query) => {
-          // Add validation of the usernames
+          // TODO: Add validation of the usernames
           context.parent ! query
           val about = query.about.mkString(" ")
           s"Working on $about."
@@ -152,7 +157,7 @@ class Replier extends Actor with ActorLogging {
               case -1 =>
                 "Please reply to the tweet in question so I can improve."
               case statusId =>
-                context.parent ! ImproveUpon(statusId, "negative")
+                context.parent ! tshrdlu.twitter.retweet.ImproveUpon(statusId, Negative())
                 "Sorry, I'll not make that mistake again."
             }
           case _ => "Sorry, I couldn't parse that. Try `tweets about scala like etorreborre jasonbaldridge`."
@@ -195,4 +200,74 @@ object TwitterRegex {
     case x => x
   }
 
+}
+
+class Fetcher extends Actor with ActorLogging {
+  import Bot._
+  import context.dispatcher
+  val twitter = new TwitterFactory().getInstance
+  var fetchtweets: ActorRef = _
+
+  override def preStart {
+    fetchtweets = context.actorOf(Props[FetchTweets], name ="tweets")
+  }
+
+  def receive = {
+    case fetch: FetchTweets => fetchtweets forward fetch
+    case FetchFriends(user) =>
+    case FetchViaQuery(about) => 
+      // This is not a choke point so far.
+      val query = new Query()
+      query.setCount(100)
+      query.setQuery(about.mkString(" "))
+      twitter.search(query).getTweets.asScala.map(_.getUser.getScreenName).toSet
+  }
+
+  class FetchTweets extends Actor with ActorLogging with Block {
+    def receive = {
+      // TODO: Also asnyc tweet fetch
+      case FetchTweets(user, pages, minId, maxId) =>
+        sender ! (1 to pages).foldRight((Iterable[Status](), maxId))({
+          case (n, (iter, maxId)) =>
+            val response = twitter.getUserTimeline(user, if(maxId == Long.MaxValue) {new Paging(1,200)} else {new Paging(1, 200, 1, maxId)})
+            limit = response.getRateLimitStatus.getRemaining
+            maybeSleep(response.getRateLimitStatus.getSecondsUntilReset)
+            (iter ++ response.iterator.toIterable, if(response.size == 0) { 1 } else {response.get(response.size - 1).getId})
+        })._1
+    }
+  }
+
+  class FetchFriends extends Actor with ActorLogging with Block {
+    def receive = {
+      // TODO also async
+      case FetchFriends(user) =>
+        var cursor: Long = -1
+        val friends = scala.collection.mutable.Buffer[Long]()
+        var ids: IDs = null
+        sender ! (try {
+          do {
+            ids = twitter.getFriendsIDs(user, cursor)
+            limit = ids.getRateLimitStatus.getRemaining
+            maybeSleep(ids.getRateLimitStatus.getSecondsUntilReset)
+            friends.appendAll(ids.getIDs().toList)
+            cursor = ids.getNextCursor()
+          } while (cursor != 0)
+        } catch {
+          case e: TwitterException => friends.toList
+        } finally {
+          friends.toList
+        })
+    }
+  }
+
+  trait Block {
+    var limit = 1
+    def maybeSleep(seconds: Int) {
+      if (limit == 0) {
+        println("waiting.... " + seconds)
+        Thread.sleep((seconds + 10)*1000)
+        limit = 1                       // Should have reset.
+      }
+    }
+  }
 }

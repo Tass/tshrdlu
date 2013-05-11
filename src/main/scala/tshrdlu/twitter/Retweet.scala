@@ -1,5 +1,6 @@
 package tshrdlu.twitter.retweet
 import akka.util.Timeout
+import scala.concurrent.Future
 import scala.concurrent.duration._
 import tshrdlu.twitter._
 import tshrdlu.util._
@@ -16,7 +17,22 @@ object Actors {
   var mf: ActorRef = null
   var ds: ActorRef = null
   var rt: ActorRef = null
+  var squeezer: ActorRef = null
+  var blocker: ActorRef = null
 }
+
+object Labels {
+  implicit def toString(label: Label): String = label.toString
+  sealed trait Label {
+  }
+  case class Positive extends Label {
+    override def toString = "positive"
+  }
+  case class Negative extends Label {
+    override def toString = "negative"
+  }
+}
+import Labels._
 
 object ModelKeys {
   // Uniquely identifies each model. The Option is a username or None
@@ -117,10 +133,13 @@ class Retweeter extends Actor with ActorLogging with PersistentMap {
 
 case class AddModel(key: ModelKey, model: FeaturizedClassifier[String, String])
 case class RT(ref: ActorRef)
-case class UpdateModel(key: ModelKey, tweets: List[String], label: String)
+case class UpdateModel(key: ModelKey, tweets: List[Status], label: Label)
 case class Ping()
 case class Pong()
 case class SqueezeRateLimit
+case class Filter(about: Set[String], from: Set[String], by: String)
+case class ImproveUpon(tweetId: Long, label: Label)
+
 // Create new models and passes them on to the retweet actor.
 class ModelFactory extends Actor with ActorLogging {
   import nak.liblinear.LiblinearConfig
@@ -136,66 +155,146 @@ class ModelFactory extends Actor with ActorLogging {
   def receive = {
     // Create a new model based on a filter and pass it on to the retweeter.
     case Filter(about, from, by) => {
-      // Blocking makes handling rate limits easier.
-      val pos = positive(about, from)
-      val neg = negative(about, from, pos.size)
-      train((Some(by), about), pos, neg)
-    }
-    // Set the retweeter.
-    case RT(ref) => {
-      rt = ref
+      // TODO create new model actor, or update existing one
     }
     // A certain tweet with id long has been responded to with positive/negative.
-    case ImproveUpon(long: Long, label: String) => {
+    case ImproveUpon(long: Long, label: Label) => {
       log.info(s"Improving upon $long")
+      // TODO this method should talk to the correct actor
       (ds ? LoadTweet(long)).mapTo[SavedTweet].foreach(x => self ! UpdateModel(x.key, List.fill(20)(x.text), label))
-    }
-    // Used by ImproveUpon currently. May be used independently later
-    // on if more tweets are fetched for a model.
-    case UpdateModel(key, tweets, label) => {
-      (ds ? Load(key)).mapTo[Tuple2[List[String], List[String]]].map({
-        case (pos, neg) =>
-          label match {
-            case "positive" => train(key, pos ++ tweets, neg)
-            case "negative" => train(key, pos, neg ++ tweets)
-            case _ => log.error(s"Unknown label $label")
-          }
-      })
     }
     // To wait for models to be trained. Send this message and wait
     // for it to return, you will then know the message queue has been
-    // worked through so far.
+    // worked through so far. TODO Doesn't work anymore with workers.
     case Ping => sender ! Pong
-  }
-
-  def train(key: ModelKey, pos: Iterable[String], neg: Iterable[String]) {
-    log.info(s"training model on $key")
-    ds ! Save(key, (pos.toList, neg.toList))
-    rt ! AddModel(key, ScalaModel.train(key._2, pos, neg))
-  }
-
-  def positive(about: Iterable[String], from: Iterable[String]): Iterable[String] = {
-    from.flatMap(fetch(_, 10)).filter(_.isRetweet).map(_.getText)
-  }
-
-  def negative(about: Iterable[String], from: Iterable[String], amount: Int): Iterable[String] = {
-    val connected = from.flatMap(friendsOf(_)).map(_.getScreenName).toSet ++ from // add followers?
-    val query = new Query()
-    query.setCount(100)
-    query.setQuery(about.mkString(" "))
-    val found = twitter.search(query).getTweets.asScala.map(_.getUser.getScreenName).toSet
-    val candidates = found -- connected
-    candidates.take(amount/200).flatMap(fetch(_)).map(_.getText)
+    case UpdateModel(key, tweets, label) => actorFor(key) ! UpdateModel(key, tweets, label)
+    case am: AddModel => rt ! am
   }
 
   def rescheduleSqueezer(seconds: Int) {
     squeezer.cancel()
     squeezer = system.scheduler.schedule(seconds seconds, 15 minutes, self, SqueezeRateLimit)
   }
+
+  val actors = scala.collection.mutable.Map[ModelKey, ActorRef]()
+
+  // Creates if neccesary and returns the actor corresponding to the
+  // key.
+  def actorFor(key: ModelKey): ActorRef = {
+    actors.getOrElseUpdate(key, system.actorOf(Props[Model], name = key._1.toString + "$" + key._2.mkString("+")))
+  }
+
+  def trained {
+    ds ! Save(key, (pos.toList, neg.toList))
+    rt ! AddModel(key, ScalaModel.train(key._2, pos, neg))
+  }
 }
 
-case class Save(key: ModelKey, pos_neg: Tuple2[List[String], List[String]])
-case class Load(key: ModelKey)
+sealed trait Considered
+case class Accepted extends Considered
+case class Rejected extends Considered
+case class Unchecked extends Considered
+
+case class CreateMoreFetches
+
+case class Train
+// Each model gets its own actor that knows about the model. In case
+// of updates, it notifies the parent so it can update the cache.
+class Model(key: ModelKey) extends Actor with ActorLogging {
+  implicit val timeout = Timeout(1 hour)
+  import Actors._
+  import context.dispatcher
+  import Bot._
+  import scala.concurrent._
+
+  val pos = scala.collection.mutable.Buffer[Status]()
+  val neg = scala.collection.mutable.Buffer[Status]()
+  var model: FeaturizedClassifier[String, String] = _
+  var trainingSchedule: Option[Cancellable] = None
+  val consideredUsers = scala.collection.mutable.Map[Tuple2[Label, Considered], Future[List[Long]]]().withDefaultValue(Future(List[Long]()))
+
+  def receive = {
+    // Create a new model based on a filter and pass it on to the retweeter.
+    case Filter(about, users, by) => {
+      consideredUsers += ((Positive(), Accepted()) -> (blocker ? FetchIds(users.toList)).mapTo[List[Long]])
+      val positiveTweets = positive()
+      val negativeUsers = negativeUserIDs(about, users)
+      val negativeTweets = negativeUsers.flatMap(users =>
+        Future.sequence(users.map(fetchBlocking(_, 1)))
+      )
+      val labeledUsers = for {
+        users <- negativeUsers
+        tweets <- negativeTweets
+      } yield {
+        val counts = tweets.map(_.count({ tweet =>
+          val text = tweet.getText.toLowerCase()
+          about.forall(text.toLowerCase.contains(_))
+        }))
+        val over = counts.filter(_ > 1).size match {
+          case size if size > 10 => 1
+          case _ => 0
+        }
+        val labels = counts.map(_ match {
+          case x if x > over => Accepted
+          case _ => Rejected
+        })
+        neg ++= tweets.zip(labels).filter({case (_, label) => label == Accepted}).map(_._1).flatten
+        users.zip(labels)
+      }
+      List(Accepted(), Rejected(), Unchecked()).foreach(label =>
+        consideredUsers += ((Negative(), label) -> labeledUsers.map(_.filter(_._2 == label).map(_._1)))
+      )
+      for {positive <- positiveTweets} yield {pos ++= positive}
+    }
+
+    case UpdateModel(_, tweets, label) => {
+      label match {
+        case Positive() => pos ++= tweets
+        case Negative() => neg ++= tweets
+      }
+      trainSoon
+    }
+    case Train => train
+    case Ping => sender ! Pong
+    case CreateMoreFetches => createMoreFetches()
+  }
+
+  def trainSoon() {
+    trainingSchedule.foreach(_.cancel)
+    trainingSchedule = Some(context.system.scheduler.scheduleOnce(30 seconds, self, Train))
+  }
+
+  def train() {
+    log.info(s"training model on $key")
+    trainingSchedule = None
+    model = ScalaModel.train(key._2, pos.map(_.getText), neg.map(_.getText))
+    context.parent ! AddModel(key, model)
+  }
+
+  def positive(): Future[List[Status]] = {
+    consideredUsers((Positive(), Accepted())).flatMap(ids =>
+      Future.sequence(ids.map(fetchBlocking(_, 10)).toList).map(_.flatten)
+    )
+  }
+
+  def negativeUserIDs(about: Iterable[String], users: Iterable[String]): Future[List[Long]] = {
+    val friendIds = Future.sequence(users.map(user => (blocker ? FetchFriends(user)).mapTo[List[Long]])).map(_.flatten)
+    val connected = Future.sequence(List(friendIds, consideredUsers((Positive(), Accepted())))).map(_.reduce(_ ++ _).toList)
+    val found = (blocker ? FetchViaQuery(about)).mapTo[List[Status]]
+    for {
+      f <- found
+      c <- connected
+    } yield (f.map(_.getUser.getId).toSet -- c.toSet).toList
+  }
+
+  def createMoreFetches() {
+  }
+
+  def fetchBlocking(userId: Long, amount: Int, minId: Long = 1l, maxId: Long = Long.MaxValue): Future[List[Status]] = {
+    (blocker ? FetchTweets(userId, amount, minId, maxId)).mapTo[List[Status]]
+  }
+}
+
 case class SaveTweet(id: Long, savedTweet: SavedTweet)
 case class LoadTweet(id: Long)
 case class SavedTweet(key: ModelKey, text: String)
@@ -205,31 +304,22 @@ class DataStore extends Actor with ActorLogging with PersistentMap {
   import scala.collection._
   // This one I keep for improving so it doesn't need to refetch the status.
   val retweeted = mutable.Map[Long, SavedTweet]()
-  // Positive / negative examples used.
-  val entries = mutable.Map[ModelKey, Tuple2[List[String], List[String]]]()
 
   def receive = {
-    case Save(key, pos_neg) => entries += (key -> pos_neg)
-    case Load(key) => sender ! entries.get(key)
     case SaveTweet(id, savedTweet) => println(id); retweeted += (id -> savedTweet)
     case LoadTweet(id) => sender ! retweeted(id)
   }
 
   val tweetFile = new java.io.File("tweets.dump")
-  val entriesFile = new java.io.File("entries.dump")
 
   override def preStart {
     load(retweeted, tweetFile)
-    load(entries, entriesFile)
   }
 
   override def postStop {
     save(retweeted, tweetFile)
-    save(entries, entriesFile)
   }
-
 }
-
 
 // Handles the feature stuff in the models. Splits a tweet into
 // tokens, then features. Currently ignores the keyword.
