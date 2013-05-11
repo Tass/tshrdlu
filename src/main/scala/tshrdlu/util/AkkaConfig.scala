@@ -10,6 +10,7 @@ import java.util.concurrent.TimeUnit
 // retweeter should ask twitter for tweets.
 class SettingsImpl(config: Config) extends Extension {
   val SetupStream: Boolean = config.getString("retweeter.setupstream") == "true"
+  val multiplyImproveBy: Int = config.getString("retweeter.multiplyImproveBy").toInt
 }
 object Settings extends ExtensionId[SettingsImpl] with ExtensionIdProvider {
  

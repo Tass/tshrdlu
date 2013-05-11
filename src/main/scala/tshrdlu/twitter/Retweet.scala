@@ -85,6 +85,7 @@ class Retweeter extends Actor with ActorLogging with PersistentMap {
               log.info(s"Evaluating $text for $keywords")
               if(relevant(status, model)) {
                 val key = (userOption, keywords)
+                ds ! SaveTweet(key, status)
                 userOption match {
                   case Some(user) => bot ! Bot.UpdateRetweet(key, new StatusUpdate(s"@$user $text" take 140).inReplyToStatusId(status.getId))
                   case None =>
@@ -98,7 +99,7 @@ class Retweeter extends Actor with ActorLogging with PersistentMap {
     }
     // Used for RetweetTester
     case Relevant(key, status) => {
-      ds ! SaveTweet(status.getId, SavedTweet(key, status.getText))
+      ds ! SaveTweet(key, status)
       sender ! relevant(status, models(key._2)(key._1))
     }
     // A new model should be added to the stream. Expects the model to
@@ -151,6 +152,7 @@ class ModelFactory extends Actor with ActorLogging {
   import context._
   import Actors._
   var squeezer = system.scheduler.schedule(10 minutes, 15 minutes, self, SqueezeRateLimit)
+  val models = scala.collection.mutable.Map[ModelKey, ActorRef]()
 
   def receive = {
     // Create a new model based on a filter and pass it on to the retweeter.
@@ -161,7 +163,7 @@ class ModelFactory extends Actor with ActorLogging {
     case ImproveUpon(long: Long, label: Label) => {
       log.info(s"Improving upon $long")
       // TODO this method should talk to the correct actor
-      (ds ? LoadTweet(long)).mapTo[SavedTweet].foreach(x => self ! UpdateModel(x.key, List.fill(20)(x.text), label))
+      (ds ? LoadTweet(long)).mapTo[Status].foreach(x => models(x) ! ImproveTweet(tweet, label))
     }
     // To wait for models to be trained. Send this message and wait
     // for it to return, you will then know the message queue has been
@@ -185,7 +187,6 @@ class ModelFactory extends Actor with ActorLogging {
   }
 
   def trained {
-    ds ! Save(key, (pos.toList, neg.toList))
     rt ! AddModel(key, ScalaModel.train(key._2, pos, neg))
   }
 }
@@ -198,6 +199,9 @@ case class Unchecked extends Considered
 case class CreateMoreFetches
 
 case class Train
+
+case class ImproveTweet(tweet: Status, label: Label)
+
 // Each model gets its own actor that knows about the model. In case
 // of updates, it notifies the parent so it can update the cache.
 class Model(key: ModelKey) extends Actor with ActorLogging {
@@ -207,6 +211,7 @@ class Model(key: ModelKey) extends Actor with ActorLogging {
   import Bot._
   import scala.concurrent._
 
+  val config = Settings(context.system)
   val pos = scala.collection.mutable.Buffer[Status]()
   val neg = scala.collection.mutable.Buffer[Status]()
   var model: FeaturizedClassifier[String, String] = _
@@ -254,6 +259,7 @@ class Model(key: ModelKey) extends Actor with ActorLogging {
       }
       trainSoon
     }
+    case ImproveTweet(tweet, label) => self ! UpdateModel(key, List.fill(config.multiplyImproveBy)(tweet), label)
     case Train => train
     case Ping => sender ! Pong
     case CreateMoreFetches => createMoreFetches()
@@ -295,18 +301,21 @@ class Model(key: ModelKey) extends Actor with ActorLogging {
   }
 }
 
-case class SaveTweet(id: Long, savedTweet: SavedTweet)
+case class SaveTweet(key: ModelKey, savedTweet: Status)
 case class LoadTweet(id: Long)
-case class SavedTweet(key: ModelKey, text: String)
+case class AlreadyTweeted(key: ModelKey, text: String)
 // A Simple n Stupid datastore so models can be retrained. Might be
 // replaced with something more sophisticated in the future.
 class DataStore extends Actor with ActorLogging with PersistentMap {
   import scala.collection._
   // This one I keep for improving so it doesn't need to refetch the status.
-  val retweeted = mutable.Map[Long, SavedTweet]()
+  val retweeted = mutable.Map[Long, Tuple2[Status, mutable.Set[ModelKey]]]()
+  val tweetedText = mutable.Set[String]()
 
   def receive = {
-    case SaveTweet(id, savedTweet) => println(id); retweeted += (id -> savedTweet)
+    case SaveTweet(key, savedTweet) =>
+      val mapValue = retweeted.getOrElseUpdate(savedTweet.getId, ((savedTweet, mutable.Set())))
+      mapValue._2 += key
     case LoadTweet(id) => sender ! retweeted(id)
   }
 
