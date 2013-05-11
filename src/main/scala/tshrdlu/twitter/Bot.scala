@@ -136,6 +136,7 @@ class Replier extends Actor with ActorLogging {
   import scala.concurrent.Future
   import scala.util.{Success,Failure}
   import tshrdlu.twitter.retweet.Labels._
+  import tshrdlu.twitter.retweet._
   implicit val timeout = Timeout(10 seconds)
 
   lazy val random = new scala.util.Random
@@ -145,10 +146,10 @@ class Replier extends Actor with ActorLogging {
     case ReplyToStatus(status) => {
       val text = status.getText
       val replyText = parse(status) match {
-        case Some(query) => {
+        case Some(filter) => {
           // TODO: Add validation of the usernames
-          context.parent ! query
-          val about = query.about.mkString(" ")
+          context.parent ! filter
+          val about = filter.about.mkString(" ")
           s"Working on $about."
         }
         case None => text match {
