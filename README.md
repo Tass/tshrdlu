@@ -32,6 +32,8 @@ This will compile the source files and put them in
 messages about Scala being downloaded -- this is fine and
 expected. Once that is over, the tshrdlu code will be compiled.
 
+## Running it
+
 Then you can create the scala model running
 
     $ bin/tshrdlu run tshrdlu.twitter.retweet.ScalaModel
@@ -43,3 +45,9 @@ store the model.
 Then you can run the bot with
 
     $ bin/tshrdlu bot
+
+# Bugs
+
+Don't use `sbt` (or `./build`) to run the bot. This will cause a crash
+because the classloader can't find twitter4j.*.StatusJSONImpl. Blame
+SBT. Works fine with `bin/tshrdlu`.
