@@ -49,4 +49,3 @@ $JAVA_COMMAND $CLASS ${1+"$@"}
 (( EXIT_CODE += $? ))
 
 exit $EXIT_CODE
-

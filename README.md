@@ -2,43 +2,23 @@
 =======
 
 Author: **Jason Baldridge** (jasonbaldridge@gmail.com)
-
-This is a parent repository for [project](https://github.com/utcompling/applied-nlp/wiki/Course-Project) related code for [Applied NLP course](https://github.com/utcompling/applied-nlp/wiki) being taught by [Jason Baldridge](http://www.jasonbaldridge.com) at [UT Austin](http://www.utexas.edu). This involves creating applications that use Twitter streams and can take automated actions as Twitter users, using natural language processing and machine learning.
+Author: **Simon Hafner** (hafnersimon@gmail.com)
 
 The name "tshrdlu" comes from Twitter+[SHRDLU](http://en.wikipedia.org/wiki/SHRDLU).
 
-For more information, updates, etc., follow [@appliednlp](https://twitter.com/appliednlp) on Twitter. The [@tshrdlu](https://twitter.com/tshrdlu) account is now doing some tweeting of its own (by which I mean automated tweeting, based on the code in this repository).
+The [@botty_anlp](https://twitter.com/botty_anlp) account is now doing
+some tweeting of its own (by which I mean automated tweeting, based on
+the code in this repository).
 
 ## Requirements
 
 * Version 1.6 of the Java 2 SDK (http://java.sun.com)
 
-## Configuring your environment variables
+## Setting up oauth
 
-The easiest thing to do is to set the environment variables `JAVA_HOME`
-and `TSHRDLU_DIR` to the relevant locations on your system. Set `JAVA_HOME`
-to match the top level directory containing the Java installation you
-want to use.
-
-Next, add the directory `TSHRDLU_DIR/bin` to your path. For example, you
-can set the path in your `.bashrc` file as follows:
-
-	export PATH=$PATH:$TSHRDLU_DIR/bin
-
-Once you have taken care of these three things, you should be able to
-build and use tshrdlu.
-
-If you plan to index and search objects using the provided code based
-on Lucene, you can customize the directory where on-disk indexes are
-stored (the default is the tempdir, check the directory `tshrdlu`) by
-setting the environment variable `TSHRDLU_INDEX_DIR`.
-
-Some functionality depends on [GeoNames](http://www.geonames.org/) API access
-(free to sign up and use). To take advantage of this functionality, create an
-account and set the environment variable `TSHRDLU_GEONAMES_USERNAME` to your
-GeoNames username. tshrdlu should still run without this but some of the
-repliers will not function.
-
+Write `src/main/resources/twitter4j.properties`, see
+http://stackoverflow.com/questions/9362550/twitter4j-oauth-consumer-key-secret-not-set
+for reference.
 
 ## Building the system from source
 
@@ -52,26 +32,14 @@ This will compile the source files and put them in
 messages about Scala being downloaded -- this is fine and
 expected. Once that is over, the tshrdlu code will be compiled.
 
-To try out other build targets, do:
+Then you can create the scala model running
 
-	$ ./build
+    $ bin/tshrdlu run tshrdlu.twitter.retweet.ScalaModel
 
-This will drop you into the SBT interface. To see the actions that are
-possible, hit the TAB key. (In general, you can do auto-completion on
-any command prefix in SBT, hurrah!)
+It doesn't exit when it's finished (I didn't bother), so ^C as soon as
+you read "Got model of None about Set(Scala)" or similar. This will
+store the model.
 
-To make sure all the tests pass, do:
+Then you can run the bot with
 
-	$ ./build test
-
-Documentation for SBT is at <http://www.scala-sbt.org/>
-
-Note: if you have SBT already installed on your system, you can
-also just call it directly with "sbt" in `TSHRDLU_DIR`.
-
-
-# Questions or suggestions?
-
-Email Jason Baldridge: <jasonbaldridge@gmail.com>
-
-Or, create an issue: <https://github.com/utcompling/tshrdlu/issues>
+    $ bin/tshrdlu bot
