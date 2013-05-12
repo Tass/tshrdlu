@@ -41,11 +41,18 @@ CLASS=
 case $CMD in
     bot) CLASS=tshrdlu.twitter.Bot; shift;;
     run) CLASS=$1; shift;;
+    repl) REPL=1; shift;;
     help) help; exit 1;;
     *) echo "Unrecognized command: $CMD"; help; exit 1;;
 esac
 
-$JAVA_COMMAND $CLASS ${1+"$@"} 
-(( EXIT_CODE += $? ))
+if [ -z $REPL ]
+then
+    $JAVA_COMMAND $CLASS ${1+"$@"} 
+    (( EXIT_CODE += $? ))
+    exit $EXIT_CODE
+else
+    scala -classpath $CP
+fi
 
-exit $EXIT_CODE
+

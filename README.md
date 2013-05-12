@@ -50,4 +50,14 @@ Then you can run the bot with
 
 Don't use `sbt` (or `./build`) to run the bot. This will cause a crash
 because the classloader can't find twitter4j.*.StatusJSONImpl. Blame
-SBT. Works fine with `bin/tshrdlu`.
+SBT. Works fine with `bin/tshrdlu`. If you still like a repl, try
+
+    $ bin/tshrdlu repl
+
+Then copy/paste the following into the repl:
+
+    val system = tshrdlu.twitter.retweet.RetweetTester.setup("twitter")
+
+This loads the actor system of the bot and connects it to the
+FilterStream from Twitter. If you don't want it to setup the
+FilterStream, you can choose `commandLine` instead of `twitter`.
