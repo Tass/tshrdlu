@@ -139,7 +139,7 @@ case class Pong()
 case class SqueezeRateLimit
 case class Filter(about: Set[String], from: Set[String], by: String)
 case class ImproveUpon(tweetId: Long, label: Label)
-case class CreateModel(key: ModelKey, pos: List[String], neg: List[String])
+case class CreateModel(key: ModelKey, pos: List[Status], neg: List[Status])
 
 // Create new models and passes them on to the retweet actor.
 class ModelFactory extends Actor with ActorLogging with PersistentMap {
@@ -176,7 +176,6 @@ class ModelFactory extends Actor with ActorLogging with PersistentMap {
     case am: AddModel => rt ! am
     case CreateModel(key, pos, neg) =>
       val actor = actorFor(key)
-      println(actors)
       actor ! CreateModel(key, pos, neg)
   }
 
@@ -186,9 +185,9 @@ class ModelFactory extends Actor with ActorLogging with PersistentMap {
   }
 
   // Creates if neccesary and returns the actor corresponding to the
-  // key. Has sideeffects because it tries to load the model.
+  // key.
   def actorFor(key: ModelKey): ActorRef = {
-    actors.getOrElseUpdate(key, system.actorOf(Props(new Model(key)), name = key._1.toString + "$" + key._2.mkString("+")))
+    actors.getOrElseUpdate(key, context.actorOf(Props(new Model(key)), name = key._1.toString + "$" + key._2.mkString("+")))
   }
 
   // Uses directory reflection to create the actors for the models.
@@ -197,21 +196,23 @@ class ModelFactory extends Actor with ActorLogging with PersistentMap {
   // Option[String] and regex it back in. The Set is serialized with
   // .mkString("+") and parsed back in by .split("+")
   def loadActors() {
+    log.info("loading models...")
     val some = """Some\((\w+)\)""".r
     Option(dataPath.list).foreach({path =>
-      val userDirs = path.map(new File(_)).filter(_.isDirectory)
+      val userDirs = path.map(new File(dataPath, _)).filter(_.isDirectory)
       for {
-        userFile <- userDirs
+        userPath <- userDirs
       } yield {
-        val user = userFile.getName match {
+        val user = userPath.getName match {
           case "None" => None
           case some(x) => Some(x)
         }
-        val modelDirs = userFile.list.map(new File(_)).filter(_.isDirectory)
+        val modelDirs = userPath.list.map(new File(userPath, _)).filter(_.isDirectory)
         modelDirs.foreach({modelPath =>
-          val model = Set() ++ modelPath.getName.split("+").toList
+          val model = Set() ++ modelPath.getName.split('+').toList
           val key: ModelKey = (user, model)
-          actors += (key -> system.actorOf(Props(new Model(key, true)), name = key._1.toString + "$" + key._2.mkString("+")))
+          log.info(s"loading model $key")
+          actors += (key -> context.actorOf(Props(new Model(key, true)), name = key._1.toString + "$" + key._2.mkString("+")))
         })
       }
     })
@@ -237,13 +238,14 @@ class Model(key: ModelKey, loadFromDisk: Boolean = false) extends Actor with Act
   import context.dispatcher
   import Bot._
   import scala.concurrent._
+  import scala.collection._
 
   val config = Settings(context.system)
-  val pos = scala.collection.mutable.Buffer[Status]()
-  val neg = scala.collection.mutable.Buffer[Status]()
+  val pos = mutable.Buffer[Status]()
+  val neg = mutable.Buffer[Status]()
   var model: FeaturizedClassifier[String, String] = _
   var trainingSchedule: Option[Cancellable] = None
-  val consideredUsers = scala.collection.mutable.Map[Tuple2[Label, Considered], Future[List[Long]]]().withDefaultValue(Future(List[Long]()))
+  val consideredUsers = mutable.Map[Tuple2[Label, Considered], Future[List[Long]]]().withDefaultValue(Future(List[Long]()))
   val modelFile = new File(keyToPath(key), "model").getPath
   val userFile = new File(keyToPath(key), "users").getPath
   val posFile = new File(keyToPath(key), "pos").getPath
@@ -253,7 +255,9 @@ class Model(key: ModelKey, loadFromDisk: Boolean = false) extends Actor with Act
     if (loadFromDisk) {
       loadBuffer(pos, posFile)
       loadBuffer(neg, negFile)
-      load(consideredUsers, userFile)
+      val userTmp = mutable.Map[Tuple2[Label, Considered], List[Long]]()
+      load(userTmp, userFile)
+      deserializeConsidered(userTmp)
       loadModel(modelFile) match {
         case Some(classifier) => model = classifier; notifyTrained
         case None => self ! Train
@@ -264,8 +268,21 @@ class Model(key: ModelKey, loadFromDisk: Boolean = false) extends Actor with Act
   override def postStop {
     save(pos, posFile)
     save(neg, negFile)
-    save(consideredUsers, userFile)
     save(model, modelFile)
+    save(serializeConsidered, userFile)
+  }
+
+  def serializeConsidered(): mutable.Map[Tuple2[Label, Considered], List[Long]] = {
+    val result = mutable.Map[Tuple2[Label, Considered], List[Long]]()
+    result ++= consideredUsers.mapValues(Await.result(_, 20 seconds))
+    result
+  }
+
+  def deserializeConsidered(serialized: mutable.Map[Tuple2[Label, Considered], List[Long]]) {
+    serialized.foreach({
+      case(key, value) =>
+        consideredUsers += (key -> Future(value))
+    })
   }
 
   def receive = {
@@ -313,9 +330,12 @@ class Model(key: ModelKey, loadFromDisk: Boolean = false) extends Actor with Act
     case Train => train
     case Ping => sender ! Pong
     case CreateMoreFetches => createMoreFetches()
-    case CreateModel(_, pos, neg) =>    // Doesn't got the usual train path.
+    case CreateModel(_, positive, negative) =>    // Doesn't got the usual train path.
       log.info(s"training a bot model on $key")
-      model = ScalaModel.train(key._2, pos, neg)
+      pos ++= positive
+      neg ++= negative
+      model = ScalaModel.train(key._2, pos.map(_.getText), neg.map(_.getText))
+      notifyTrained
   }
 
   def trainSoon() {
@@ -403,20 +423,15 @@ class DataStore extends Actor with ActorLogging with PersistentMap {
 
 // Handles the feature stuff in the models. Splits a tweet into
 // tokens, then features. Currently ignores the keyword.
-class FeatureCollector(about: Iterable[String]) extends Featurizer[String, String]{
-  val feats = List(
-    {(parsed: Iterable[Token]) => parsed.map(token => "token=" + token.token.toLowerCase)},
-    {(parsed: Iterable[Token]) => parsed.map(token => "tag=" + token.tag)},
-    {(parsed: Iterable[Token]) => parsed.map(token => "token+tag=" + token.token.toLowerCase + "+" + token.tag)},
-    {(parsed: Iterable[Token]) => parsed.sliding(2).map(list => list.map(_.tag).mkString("bigramTags=", "+", "")).toIterable},
-    {(parsed: Iterable[Token]) => parsed.sliding(2).map(list => list.map(_.token.toLowerCase).mkString("bigramTokens=", "+", "")).toIterable}
-  )
-  val ignore = about.toSet
+class FeatureCollector(about: Set[String]) extends Featurizer[String, String] {
   def apply(raw: String) = {
-    val parsed = POSTagger(raw)
-    feats.flatMap(
-      _.apply(parsed.filterNot(item => ignore(item.token.toLowerCase))
-      ).map(FeatureObservation(_)))
+    val parsed = POSTagger(raw).filterNot(item => about(item.token.toLowerCase))
+    val features = parsed.map(token => "token=" + token.token.toLowerCase) ++
+    parsed.map(token => "tag=" + token.tag) ++
+    parsed.map(token => "token+tag=" + token.token.toLowerCase + "+" + token.tag) ++
+    parsed.sliding(2).map(list => list.map(_.tag).mkString("bigramTags=", "+", "")) ++
+    parsed.sliding(2).map(list => list.map(_.token.toLowerCase).mkString("bigramTokens=", "+", ""))
+    features.map(FeatureObservation(_))
   }
 }
 
@@ -427,8 +442,20 @@ import DefaultJsonProtocol._
 object ScalaModel {
   import nak.liblinear.LiblinearConfig
   val numberOfTweets = 10000            // Increase heap space if you want more.
-  lazy val neg: Iterable[String] = io.Source.fromURL(getClass.getResource("/retweet/scala-lang-neg")).getLines.map(_.asJson.convertTo[Tuple5[Long, String, Long, String, String]]).map(_._5).toIterable.take(10000)
-  lazy val pos: Iterable[String] = io.Source.fromURL(getClass.getResource("/retweet/scala-lang")).getLines.map(_.asJson.convertTo[Tuple5[Long, String, Long, String, String]]).take(neg.size).map(_._5).toIterable.take(10000)
+  lazy val neg: List[Status] = fakeStatuses(io.Source.fromURL(getClass.getResource("/retweet/scala-lang-neg")).getLines.map(_.asJson.convertTo[Tuple5[Long, String, Long, String, String]]).take(10000))
+  lazy val pos: List[Status] = fakeStatuses(io.Source.fromURL(getClass.getResource("/retweet/scala-lang")).getLines.map(_.asJson.convertTo[Tuple5[Long, String, Long, String, String]]).take(neg.size))
+
+  def fakeStatuses(iter: Iterator[Tuple5[Long, String, Long, String, String]]): List[Status] = {
+    import tshrdlu.repl._
+    iter.map({tweet =>
+      val tweetId = tweet._1
+      val screenName = tweet._2
+      val time = tweet._3
+      val retweet = tweet._4 == "true"
+      val text = tweet._5
+      new FakeStatus(tweetId, text, new FakeUser(0, null, screenName))
+    }).toList
+  }
 
   def train(about: Set[String], pos: Iterable[String], neg: Iterable[String]): FeaturizedClassifier[String, String]  = {
     val train = List((pos, "positive"), (neg, "negative")).flatMap({
@@ -440,7 +467,7 @@ object ScalaModel {
   }
 
   def featurizer(about: Iterable[String]): Featurizer[String, String] = {
-    new FeatureCollector(about)
+    new FeatureCollector(about.toSet)
   }
 
   def main(args: Array[String]) {
@@ -456,7 +483,9 @@ trait PersistentMap {
   import java.io._
   val dataPath = new File("data")
   def save[T](map: T, to: String) {
-	val oos = new ObjectOutputStream(new FileOutputStream(new File(dataPath, to)))
+    val toPath = new File(dataPath, to)
+    new File(toPath.getParent).mkdirs
+	val oos = new ObjectOutputStream(new FileOutputStream(toPath))
     oos.writeObject(map)
     oos.close()
   }
