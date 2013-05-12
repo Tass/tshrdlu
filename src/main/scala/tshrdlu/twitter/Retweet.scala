@@ -173,7 +173,7 @@ class ModelFactory extends Actor with ActorLogging {
     // A certain tweet with id long has been responded to with positive/negative.
     case ImproveUpon(long: Long, label: Label) => {
       log.info(s"Improving upon $long")
-      (ds ? LoadTweet(long)).mapTo[Tuple2[Status, Set[ModelKey]]].foreach({case (tweet, forModels) => forModels.foreach(key => models(key) ! ImproveTweet(tweet, label))})
+      (ds ? LoadTweet(long)).mapTo[Tuple2[Status, Set[ModelKey]]].foreach({case (tweet, forModels) => forModels.foreach(key => actors(key) ! ImproveTweet(tweet, label))})
     }
     // To wait for models to be trained. Send this message and wait
     // for it to return, you will then know the message queue has been
@@ -227,10 +227,10 @@ class Model(key: ModelKey) extends Actor with ActorLogging with PersistentMap {
   var model: FeaturizedClassifier[String, String] = _
   var trainingSchedule: Option[Cancellable] = None
   val consideredUsers = scala.collection.mutable.Map[Tuple2[Label, Considered], Future[List[Long]]]().withDefaultValue(Future(List[Long]()))
-  val modelFile = new File(keyToPath(key), "model")
-  val userFile = new File(keyToPath(key), "users")
-  val posFile = new File(keyToPath(key), "pos")
-  val negFile = new File(keyToPath(key), "neg")
+  val modelFile = new File(keyToPath(key), "model").getPath
+  val userFile = new File(keyToPath(key), "users").getPath
+  val posFile = new File(keyToPath(key), "pos").getPath
+  val negFile = new File(keyToPath(key), "neg").getPath
 
   override def preStart {
     loadBuffer(pos, posFile)
@@ -325,6 +325,7 @@ class Model(key: ModelKey) extends Actor with ActorLogging with PersistentMap {
   }
 
   def createMoreFetches() {
+    ???
   }
 
   def fetchBlocking(userId: Long, amount: Int, minId: Long = 1l, maxId: Long = Long.MaxValue): Future[List[Status]] = {
@@ -356,8 +357,8 @@ class DataStore extends Actor with ActorLogging with PersistentMap {
     case AlreadyTweeted(key, text) => sender ! tweetedText(key)(text)
   }
 
-  val tweetFile = new java.io.File("tweets.dump")
-  val retweetedText = new java.io.File("retweeted.dump")
+  val tweetFile = "tweets.dump"
+  val retweetedText = "retweeted.dump"
 
   override def preStart {
     load(retweeted, tweetFile)
