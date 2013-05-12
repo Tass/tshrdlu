@@ -20,10 +20,6 @@ object RetweetTester {
       Actors.mf = context.actorOf(Props[ModelFactory], name = "ModelFactory")
       Actors.ds = context.actorOf(Props[DataStore], name = "DataStore")
     }
-
-    def receive = {
-      case x: Any => println(x)
-    }
   }
 
   class DeadLetterListener extends Actor {
@@ -35,9 +31,9 @@ object RetweetTester {
   import Actors._
   import akka.actor.{ Actor, DeadLetter, Props }
 
-  def setup = {
+  def setup(configName: String = "repl") = {
     val config = ConfigFactory.load()
-    val system = ActorSystem("TwitterBot", config.getConfig("repl").withFallback(config))
+    val system = ActorSystem("TwitterBot", config.getConfig(configName).withFallback(config))
     Runtime.getRuntime.addShutdownHook(
       new Thread( new Runnable { def run {system.shutdown; system.awaitTermination}}))
 
@@ -71,7 +67,7 @@ object RetweetTester {
     import Labels._
     implicit val timeout = Timeout(1 minute)
 
-    val system = setup
+    val system = setup()
     Thread.sleep(10000)                 // Ugly, but works.
     val twitter = (new TwitterFactory).getInstance()
     Actors.mf ! Filter(Set("scala"), Set("etorreborre", "jasonbaldridge"), "reactormonk")

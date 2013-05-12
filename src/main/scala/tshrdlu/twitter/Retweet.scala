@@ -83,13 +83,12 @@ class Retweeter extends Actor with ActorLogging with PersistentMap {
               log.info(s"Evaluating $text for $keywords")
               if(relevant(status, model)) {
                 val key = (userOption, keywords)
-                ds ! SaveTweet(key, status)
                 userOption match {
                   case Some(user) => bot ! Bot.UpdateRetweet(key, new StatusUpdate(s"@$user $text" take 140).inReplyToStatusId(status.getId))
                   case None =>
                     val response = (if (text.startsWith("RT")) {text} else {"RT " + text}) take 140
                     val newStatus = (bot ? Bot.UpdateRetweet(key, new StatusUpdate(response).inReplyToStatusId(status.getId))).mapTo[Status]
-                    newStatus.foreach(stat => ds ! SaveTweet(key, status))
+                    newStatus.foreach(stat => ds ! SaveTweet(stat.getId, key, status))
                 }
               }
           })
@@ -98,7 +97,7 @@ class Retweeter extends Actor with ActorLogging with PersistentMap {
     }
     // Used for RetweetTester
     case Relevant(key, status) => {
-      ds ! SaveTweet(key, status)
+      ds ! SaveTweet(status.getId, key, status)
       sender ! relevant(status, models(key._2)(key._1))
     }
     // A new model should be added to the stream. Expects the model to
@@ -379,12 +378,11 @@ class Model(key: ModelKey, loadFromDisk: Boolean = false) extends Actor with Act
   }
 }
 
-case class SaveTweet(key: ModelKey, savedTweet: Status)
+case class SaveTweet(retweetId: Long, key: ModelKey, savedTweet: Status)
 case class LoadTweet(id: Long)
 // Not used. Twitter usually takes care of that.
 case class AlreadyTweeted(key: ModelKey, text: String)
-// A Simple n Stupid datastore so models can be retrained. Might be
-// replaced with something more sophisticated in the future.
+// Stores tweets so the bot knows which tweet came from which model.
 class DataStore extends Actor with ActorLogging with PersistentMap {
   import scala.collection._
   // This one I keep for improving so it doesn't need to refetch the status.
@@ -392,8 +390,8 @@ class DataStore extends Actor with ActorLogging with PersistentMap {
   val tweetedText = mutable.Map[ModelKey, Set[String]]()
 
   def receive = {
-    case SaveTweet(key, savedTweet) =>
-      val mapValue = retweeted.getOrElseUpdate(savedTweet.getId, ((savedTweet, mutable.Set())))
+    case SaveTweet(retweetId, key, savedTweet) =>
+      val mapValue = retweeted.getOrElseUpdate(retweetId, ((savedTweet, mutable.Set())))
       mapValue._2 += key
       val newSet: Set[String] = tweetedText.getOrElse(key, Set[String]()) + savedTweet.getText()
       tweetedText += (key -> newSet)
@@ -472,7 +470,7 @@ object ScalaModel {
 
   def main(args: Array[String]) {
     // Add the bot model for scala
-    val system = RetweetTester.setup
+    val system = RetweetTester.setup("commandLine")
     Thread.sleep(5000)                 // Ugly, but works.
     Actors.mf ! CreateModel((None, Set("scala")), pos.toList, neg.toList)
   }
@@ -531,4 +529,3 @@ trait PersistentMap {
     } else {None}
   }
 }
-
