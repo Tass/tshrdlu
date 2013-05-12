@@ -49,6 +49,7 @@ case class Relevant(key: ModelKey, status:Status)
 class Retweeter extends Actor with ActorLogging with PersistentMap {
   import Actors._
   import Bot._
+  import context.dispatcher
   // The Option is used to say that it's a global model, so the
   // retweets don't go to a specific person.
   type ModelsClass = scala.collection.mutable.Map[Set[String], scala.collection.mutable.Map[Option[String], FeaturizedClassifier[String, String]]]
@@ -57,6 +58,7 @@ class Retweeter extends Actor with ActorLogging with PersistentMap {
   val modelFile = new java.io.File("models.dump")
   val config = Settings(context.system)
   val username = new TwitterStreamFactory().getInstance.getScreenName
+  implicit val timeout = Timeout(1 minute)
 
   override def preStart {
     load(models, modelFile)
@@ -90,7 +92,8 @@ class Retweeter extends Actor with ActorLogging with PersistentMap {
                   case Some(user) => bot ! Bot.UpdateRetweet(key, new StatusUpdate(s"@$user $text" take 140).inReplyToStatusId(status.getId))
                   case None =>
                     val response = (if (text.startsWith("RT")) {text} else {"RT " + text}) take 140
-                    bot ! Bot.UpdateRetweet(key, new StatusUpdate(response).inReplyToStatusId(status.getId))
+                    val newStatus = (bot ? Bot.UpdateRetweet(key, new StatusUpdate(response).inReplyToStatusId(status.getId))).mapTo[Status]
+                    newStatus.foreach(stat => ds ! SaveTweet(stat.getId -> (stat, key)))
                 }
               }
           })
@@ -163,7 +166,7 @@ class ModelFactory extends Actor with ActorLogging {
     case ImproveUpon(long: Long, label: Label) => {
       log.info(s"Improving upon $long")
       // TODO this method should talk to the correct actor
-      (ds ? LoadTweet(long)).mapTo[Status].foreach(x => models(x) ! ImproveTweet(tweet, label))
+      (ds ? LoadTweet(long)).mapTo[Status].foreach(tweet => models(key) ! ImproveTweet(tweet, label))
     }
     // To wait for models to be trained. Send this message and wait
     // for it to return, you will then know the message queue has been
@@ -303,6 +306,7 @@ class Model(key: ModelKey) extends Actor with ActorLogging {
 
 case class SaveTweet(key: ModelKey, savedTweet: Status)
 case class LoadTweet(id: Long)
+// Not used. Twitter usually takes care of that.
 case class AlreadyTweeted(key: ModelKey, text: String)
 // A Simple n Stupid datastore so models can be retrained. Might be
 // replaced with something more sophisticated in the future.
@@ -310,19 +314,29 @@ class DataStore extends Actor with ActorLogging with PersistentMap {
   import scala.collection._
   // This one I keep for improving so it doesn't need to refetch the status.
   val retweeted = mutable.Map[Long, Tuple2[Status, mutable.Set[ModelKey]]]()
-  val tweetedText = mutable.Set[String]()
+  val tweetedText = mutable.Map[ModelKey, Set[String]]()
 
   def receive = {
     case SaveTweet(key, savedTweet) =>
       val mapValue = retweeted.getOrElseUpdate(savedTweet.getId, ((savedTweet, mutable.Set())))
       mapValue._2 += key
+      val newSet: Set[String] = tweetedText.getOrElse(key, Set[String]()) + savedTweet.getText()
+      tweetedText += (key -> newSet)
     case LoadTweet(id) => sender ! retweeted(id)
+    case AlreadyTweeted(key, text) => sender ! tweetedText(key)(text)
   }
 
   val tweetFile = new java.io.File("tweets.dump")
+  val retweetedText = new java.io.File("retweeted.dump")
 
   override def preStart {
     load(retweeted, tweetFile)
+    retweeted.foreach({
+      case (_, (status, setOfKeys)) =>
+        setOfKeys.foreach(key =>
+          tweetedText += (key -> {tweetedText.getOrElse(key, Set[String]()) + status.getText()})
+        )
+    })
   }
 
   override def postStop {
