@@ -11,6 +11,7 @@ import nak.data._
 import akka.actor._
 import twitter4j._
 import akka.pattern._
+import java.io._
 
 // Actor globals, shouldn't be too evil.
 object Actors {
@@ -23,6 +24,10 @@ object Actors {
 
 object Labels {
   implicit def toString(label: Label): String = label.toString
+  implicit def toLabel(string: String): Label = string match {
+    case "positive" => Positive()
+    case "negative" => Negative()
+  }
   sealed trait Label {
   }
   case class Positive extends Label {
@@ -93,7 +98,7 @@ class Retweeter extends Actor with ActorLogging with PersistentMap {
                   case None =>
                     val response = (if (text.startsWith("RT")) {text} else {"RT " + text}) take 140
                     val newStatus = (bot ? Bot.UpdateRetweet(key, new StatusUpdate(response).inReplyToStatusId(status.getId))).mapTo[Status]
-                    newStatus.foreach(stat => ds ! SaveTweet(stat.getId -> (stat, key)))
+                    newStatus.foreach(stat => ds ! SaveTweet(key, status))
                 }
               }
           })
@@ -155,7 +160,10 @@ class ModelFactory extends Actor with ActorLogging {
   import context._
   import Actors._
   var squeezer = system.scheduler.schedule(10 minutes, 15 minutes, self, SqueezeRateLimit)
-  val models = scala.collection.mutable.Map[ModelKey, ActorRef]()
+
+  override def preStart {
+    loadActors
+  }
 
   def receive = {
     // Create a new model based on a filter and pass it on to the retweeter.
@@ -165,8 +173,7 @@ class ModelFactory extends Actor with ActorLogging {
     // A certain tweet with id long has been responded to with positive/negative.
     case ImproveUpon(long: Long, label: Label) => {
       log.info(s"Improving upon $long")
-      // TODO this method should talk to the correct actor
-      (ds ? LoadTweet(long)).mapTo[Status].foreach(tweet => models(key) ! ImproveTweet(tweet, label))
+      (ds ? LoadTweet(long)).mapTo[Tuple2[Status, Set[ModelKey]]].foreach({case (tweet, forModels) => forModels.foreach(key => models(key) ! ImproveTweet(tweet, label))})
     }
     // To wait for models to be trained. Send this message and wait
     // for it to return, you will then know the message queue has been
@@ -189,8 +196,8 @@ class ModelFactory extends Actor with ActorLogging {
     actors.getOrElseUpdate(key, system.actorOf(Props[Model], name = key._1.toString + "$" + key._2.mkString("+")))
   }
 
-  def trained {
-    rt ! AddModel(key, ScalaModel.train(key._2, pos, neg))
+  // Uses reflection to create the actors for the models
+  def loadActors() {
   }
 }
 
@@ -207,7 +214,7 @@ case class ImproveTweet(tweet: Status, label: Label)
 
 // Each model gets its own actor that knows about the model. In case
 // of updates, it notifies the parent so it can update the cache.
-class Model(key: ModelKey) extends Actor with ActorLogging {
+class Model(key: ModelKey) extends Actor with ActorLogging with PersistentMap {
   implicit val timeout = Timeout(1 hour)
   import Actors._
   import context.dispatcher
@@ -220,6 +227,27 @@ class Model(key: ModelKey) extends Actor with ActorLogging {
   var model: FeaturizedClassifier[String, String] = _
   var trainingSchedule: Option[Cancellable] = None
   val consideredUsers = scala.collection.mutable.Map[Tuple2[Label, Considered], Future[List[Long]]]().withDefaultValue(Future(List[Long]()))
+  val modelFile = new File(keyToPath(key), "model")
+  val userFile = new File(keyToPath(key), "users")
+  val posFile = new File(keyToPath(key), "pos")
+  val negFile = new File(keyToPath(key), "neg")
+
+  override def preStart {
+    loadBuffer(pos, posFile)
+    loadBuffer(neg, negFile)
+    load(consideredUsers, userFile)
+    loadModel(modelFile) match {
+      case Some(classifier) => model = classifier
+      case None => self ! Train
+    }
+  }
+
+  override def postStop {
+    save(pos, posFile)
+    save(neg, negFile)
+    save(consideredUsers, userFile)
+    save(model, modelFile)
+  }
 
   def receive = {
     // Create a new model based on a filter and pass it on to the retweeter.
@@ -322,7 +350,9 @@ class DataStore extends Actor with ActorLogging with PersistentMap {
       mapValue._2 += key
       val newSet: Set[String] = tweetedText.getOrElse(key, Set[String]()) + savedTweet.getText()
       tweetedText += (key -> newSet)
-    case LoadTweet(id) => sender ! retweeted(id)
+    case LoadTweet(id) =>
+      val tuple = retweeted(id)
+      sender ! (tuple._1, tuple._2.toSet)
     case AlreadyTweeted(key, text) => sender ! tweetedText(key)(text)
   }
 
@@ -400,19 +430,51 @@ object ScalaModel {
 trait PersistentMap {
   import scala.collection.mutable._
   import java.io._
-  def save[T, U](map: Map[T, U], to: File) {
-	val oos = new ObjectOutputStream(new FileOutputStream(to))
+  val dataPath = new File("data")
+  def save[T](map: T, to: String) {
+	val oos = new ObjectOutputStream(new FileOutputStream(new File(dataPath, to)))
     oos.writeObject(map)
     oos.close()
   }
 
-  def load[T, U](map: Map[T, U], from: File) {
-    if(from.exists) {
-      val ois = new ObjectInputStream(new FileInputStream(from))
+  def load[T, U](map: Map[T, U], from: String) {
+    val fromPath = new File(dataPath, from)
+    if(fromPath.exists) {
+      val ois = new ObjectInputStream(new FileInputStream(fromPath))
       ois.readObject match {
         case mappy: Map[T, U] => map ++= mappy
         case null => // ignore
       }
     }
+  }
+
+  def loadBuffer[T](buffer: Buffer[T], from: String) {
+    val fromPath = new File(dataPath, from)
+    if(fromPath.exists) {
+      val ois = new ObjectInputStream(new FileInputStream(fromPath))
+      ois.readObject match {
+        case buff: Buffer[T] => buffer ++= buff
+        case null => // ignore
+      }
+    }
+  }
+
+  def keyToPath(key: ModelKey): File = {
+    new File(new File(dataPath, key._1.toString), key._2.mkString("-"))
+  }
+
+  def mkdir(key: ModelKey) {
+    new File(dataPath, key._1.toString).mkdir
+  }
+
+  def loadModel[T, U](from: String): Option[FeaturizedClassifier[String, String]] = {
+    val fromPath = new File(dataPath, from)
+    if(fromPath.exists) {
+      val ois = new ObjectInputStream(new FileInputStream(fromPath))
+      ois.readObject match {
+        case classifier: FeaturizedClassifier[String, String] => Some(classifier)
+        case _ => None
+      }
+    } else {None}
   }
 }
