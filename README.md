@@ -10,6 +10,32 @@ The [@botty_anlp](https://twitter.com/botty_anlp) account is now doing
 some tweeting of its own (by which I mean automated tweeting, based on
 the code in this repository).
 
+## Talking to the bot
+
+The bot should be running as @botty_anlp, feel free to talk to it.
+Please keep crashes reproducible.
+
+Commands the bot currently understands:
+
+### Adding models
+
+    @botty_anlp .* tweets about $keyword like $name $name $name
+    @botty_anlp .* tweets like $name $name $name about $keyword 
+
+The order doesn't matter, I didn't want to look it up every time. If
+the model already exists, it will add the users you provided. Might
+not give a response the second time because twitter doesn't like
+posting the same status twice.
+
+### Improving models
+
+    @botty_anlp no .*
+    @botty_anlp bad bot .*
+
+As a reply to a tweet that you thing doesn't correspond to the model.
+The `.*` so you don't have to delete your own status to avoid the same
+problem as above with the same tweet twice.
+
 ## Requirements
 
 * Version 1.6 of the Java 2 SDK (http://java.sun.com)

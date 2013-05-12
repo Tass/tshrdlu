@@ -140,7 +140,7 @@ class Replier extends Actor with ActorLogging {
   implicit val timeout = Timeout(10 seconds)
 
   lazy val random = new scala.util.Random
-  val no = """(?i).*(?:no[!.]?|bad bot!?)""".r
+  val no = """(?i).*(?:no[!.]?|bad bot!?)(?: .*)?""".r
 
   def receive = {
     case ReplyToStatus(status) => {
