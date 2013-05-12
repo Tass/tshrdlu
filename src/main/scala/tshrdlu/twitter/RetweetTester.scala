@@ -68,6 +68,7 @@ object RetweetTester {
   def main(args: Array[String]) {
     import scala.collection.JavaConversions._
     import scala.collection.JavaConverters._
+    import Labels._
     implicit val timeout = Timeout(1 minute)
 
     val system = setup

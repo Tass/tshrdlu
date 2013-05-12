@@ -85,8 +85,6 @@ class Bot extends Actor with ActorLogging {
 
   override def preStart {
     modelfactory ! RT(retweeter)
-    // Add the bot model for scala
-    retweeter ! AddModel((None, Set("scala")), ScalaModel.classifier)
   }
 
   def receive = {
@@ -105,7 +103,7 @@ class Bot extends Actor with ActorLogging {
     case UpdateRetweet(key, update) =>
       log.info("Posting retweet: " + update.getStatus)
       val status = twitter.updateStatus(update)
-      datastore ! SaveTweet(status.getId, SavedTweet(key, status.getText))
+      sender ! status
 
     case status: Status =>
       log.info("New status: " + status.getText)

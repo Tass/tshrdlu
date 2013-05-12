@@ -60,18 +60,9 @@ class Retweeter extends Actor with ActorLogging with PersistentMap {
   type ModelsClass = scala.collection.mutable.Map[Set[String], scala.collection.mutable.Map[Option[String], FeaturizedClassifier[String, String]]]
   // Topics first, then User.
   val models: ModelsClass = scala.collection.mutable.Map[Set[String], scala.collection.mutable.Map[Option[String], FeaturizedClassifier[String, String]]]()
-  val modelFile = new java.io.File("models.dump")
   val config = Settings(context.system)
   val username = new TwitterStreamFactory().getInstance.getScreenName
   implicit val timeout = Timeout(1 minute)
-
-  override def preStart {
-    load(models, modelFile)
-  }
-
-  override def postStop {
-    save(models, modelFile)
-  }
 
   // Global here. Somewhat ugly.
   lazy val streamer = new Streamer(context.self)
@@ -148,9 +139,10 @@ case class Pong()
 case class SqueezeRateLimit
 case class Filter(about: Set[String], from: Set[String], by: String)
 case class ImproveUpon(tweetId: Long, label: Label)
+case class CreateModel(key: ModelKey, pos: List[String], neg: List[String])
 
 // Create new models and passes them on to the retweet actor.
-class ModelFactory extends Actor with ActorLogging {
+class ModelFactory extends Actor with ActorLogging with PersistentMap {
   import nak.liblinear.LiblinearConfig
   import tshrdlu.data.Grab._
   import scala.collection.JavaConverters._
@@ -160,6 +152,7 @@ class ModelFactory extends Actor with ActorLogging {
   import context._
   import Actors._
   var squeezer = system.scheduler.schedule(10 minutes, 15 minutes, self, SqueezeRateLimit)
+  val actors = scala.collection.mutable.Map[ModelKey, ActorRef]()
 
   override def preStart {
     loadActors
@@ -181,6 +174,10 @@ class ModelFactory extends Actor with ActorLogging {
     case Ping => sender ! Pong
     case UpdateModel(key, tweets, label) => actorFor(key) ! UpdateModel(key, tweets, label)
     case am: AddModel => rt ! am
+    case CreateModel(key, pos, neg) =>
+      val actor = actorFor(key)
+      println(actors)
+      actor ! CreateModel(key, pos, neg)
   }
 
   def rescheduleSqueezer(seconds: Int) {
@@ -188,16 +185,36 @@ class ModelFactory extends Actor with ActorLogging {
     squeezer = system.scheduler.schedule(seconds seconds, 15 minutes, self, SqueezeRateLimit)
   }
 
-  val actors = scala.collection.mutable.Map[ModelKey, ActorRef]()
-
   // Creates if neccesary and returns the actor corresponding to the
-  // key.
+  // key. Has sideeffects because it tries to load the model.
   def actorFor(key: ModelKey): ActorRef = {
-    actors.getOrElseUpdate(key, system.actorOf(Props[Model], name = key._1.toString + "$" + key._2.mkString("+")))
+    actors.getOrElseUpdate(key, system.actorOf(Props(new Model(key)), name = key._1.toString + "$" + key._2.mkString("+")))
   }
 
-  // Uses reflection to create the actors for the models
+  // Uses directory reflection to create the actors for the models.
+  // The pattern is data/Option[String]/Set[String]. Since the
+  // usernames/topics are restricted to \w, I use toString on the
+  // Option[String] and regex it back in. The Set is serialized with
+  // .mkString("+") and parsed back in by .split("+")
   def loadActors() {
+    val some = """Some\((\w+)\)""".r
+    Option(dataPath.list).foreach({path =>
+      val userDirs = path.map(new File(_)).filter(_.isDirectory)
+      for {
+        userFile <- userDirs
+      } yield {
+        val user = userFile.getName match {
+          case "None" => None
+          case some(x) => Some(x)
+        }
+        val modelDirs = userFile.list.map(new File(_)).filter(_.isDirectory)
+        modelDirs.foreach({modelPath =>
+          val model = Set() ++ modelPath.getName.split("+").toList
+          val key: ModelKey = (user, model)
+          actors += (key -> system.actorOf(Props(new Model(key, true)), name = key._1.toString + "$" + key._2.mkString("+")))
+        })
+      }
+    })
   }
 }
 
@@ -214,7 +231,7 @@ case class ImproveTweet(tweet: Status, label: Label)
 
 // Each model gets its own actor that knows about the model. In case
 // of updates, it notifies the parent so it can update the cache.
-class Model(key: ModelKey) extends Actor with ActorLogging with PersistentMap {
+class Model(key: ModelKey, loadFromDisk: Boolean = false) extends Actor with ActorLogging with PersistentMap {
   implicit val timeout = Timeout(1 hour)
   import Actors._
   import context.dispatcher
@@ -233,12 +250,14 @@ class Model(key: ModelKey) extends Actor with ActorLogging with PersistentMap {
   val negFile = new File(keyToPath(key), "neg").getPath
 
   override def preStart {
-    loadBuffer(pos, posFile)
-    loadBuffer(neg, negFile)
-    load(consideredUsers, userFile)
-    loadModel(modelFile) match {
-      case Some(classifier) => model = classifier
-      case None => self ! Train
+    if (loadFromDisk) {
+      loadBuffer(pos, posFile)
+      loadBuffer(neg, negFile)
+      load(consideredUsers, userFile)
+      loadModel(modelFile) match {
+        case Some(classifier) => model = classifier; notifyTrained
+        case None => self ! Train
+      }
     }
   }
 
@@ -294,6 +313,9 @@ class Model(key: ModelKey) extends Actor with ActorLogging with PersistentMap {
     case Train => train
     case Ping => sender ! Pong
     case CreateMoreFetches => createMoreFetches()
+    case CreateModel(_, pos, neg) =>    // Doesn't got the usual train path.
+      log.info(s"training a bot model on $key")
+      model = ScalaModel.train(key._2, pos, neg)
   }
 
   def trainSoon() {
@@ -305,7 +327,7 @@ class Model(key: ModelKey) extends Actor with ActorLogging with PersistentMap {
     log.info(s"training model on $key")
     trainingSchedule = None
     model = ScalaModel.train(key._2, pos.map(_.getText), neg.map(_.getText))
-    context.parent ! AddModel(key, model)
+    notifyTrained
   }
 
   def positive(): Future[List[Status]] = {
@@ -326,6 +348,10 @@ class Model(key: ModelKey) extends Actor with ActorLogging with PersistentMap {
 
   def createMoreFetches() {
     ???
+  }
+
+  def notifyTrained() {
+    context.parent ! AddModel(key, model)
   }
 
   def fetchBlocking(userId: Long, amount: Int, minId: Long = 1l, maxId: Long = Long.MaxValue): Future[List[Status]] = {
@@ -404,16 +430,6 @@ object ScalaModel {
   lazy val neg: Iterable[String] = io.Source.fromURL(getClass.getResource("/retweet/scala-lang-neg")).getLines.map(_.asJson.convertTo[Tuple5[Long, String, Long, String, String]]).map(_._5).toIterable.take(10000)
   lazy val pos: Iterable[String] = io.Source.fromURL(getClass.getResource("/retweet/scala-lang")).getLines.map(_.asJson.convertTo[Tuple5[Long, String, Long, String, String]]).take(neg.size).map(_._5).toIterable.take(10000)
 
-  val classifier = train(Set("scala"), pos, neg)
-
-  // val file = "/retweet/scala-lang-classifier"
-  // lazy val classifier = loadClassifier[FeaturizedClassifier[String,String]](file)
-
-  // def main(args: Array[String]) {
-  //   val to = new FileOutputStream(getClass.getResourceAsStream(file))
-  //   saveClassifier(train(Set("scala"), pos, neg), to)
-  // }
-
   def train(about: Set[String], pos: Iterable[String], neg: Iterable[String]): FeaturizedClassifier[String, String]  = {
     val train = List((pos, "positive"), (neg, "negative")).flatMap({
       case (collection, label) =>
@@ -425,6 +441,13 @@ object ScalaModel {
 
   def featurizer(about: Iterable[String]): Featurizer[String, String] = {
     new FeatureCollector(about)
+  }
+
+  def main(args: Array[String]) {
+    // Add the bot model for scala
+    val system = RetweetTester.setup
+    Thread.sleep(5000)                 // Ugly, but works.
+    Actors.mf ! CreateModel((None, Set("scala")), pos.toList, neg.toList)
   }
 }
 
@@ -460,12 +483,12 @@ trait PersistentMap {
     }
   }
 
-  def keyToPath(key: ModelKey): File = {
-    new File(new File(dataPath, key._1.toString), key._2.mkString("-"))
+  def keyToPath(key: ModelKey): String = {
+    new File(key._1.toString, key._2.mkString("-")).getPath
   }
 
   def mkdir(key: ModelKey) {
-    new File(dataPath, key._1.toString).mkdir
+    new File(dataPath, key._1.toString).mkdirs
   }
 
   def loadModel[T, U](from: String): Option[FeaturizedClassifier[String, String]] = {
@@ -479,3 +502,4 @@ trait PersistentMap {
     } else {None}
   }
 }
+
