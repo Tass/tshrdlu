@@ -42,7 +42,6 @@ object Bot {
   case class ReplyToStatus(status: Status)
   case class SearchTwitter(query: Query)
   case class UpdateStatus(update: StatusUpdate)
-  case class UpdateRetweet(key: tshrdlu.twitter.retweet.ModelKeys.ModelKey, status: StatusUpdate)
   case class Retweet(id: Long)
   case class FetchTweets(userId: Long, pages: Int, minId: Long, maxId: Long) // one page is 200 tweets
   case class FetchFriends(user: String) // 5000 a piece. Should be enough. List[Long]
@@ -98,12 +97,15 @@ class Bot extends Actor with ActorLogging {
       
     case UpdateStatus(update) => 
       log.info("Posting update: " + update.getStatus)
-      twitter.updateStatus(update)
-
-    case UpdateRetweet(key, update) =>
-      log.info("Posting retweet: " + update.getStatus)
-      val status = twitter.updateStatus(update)
-      sender ! status
+      try {
+        val status = twitter.updateStatus(update)
+        sender ! status
+      } catch {
+        case e: Exception =>
+          sender ! scala.concurrent.Promise.failed(e)
+          log.warning(e.toString)
+          // And ignore it.
+      }
 
     case status: Status =>
       log.info("New status: " + status.getText)

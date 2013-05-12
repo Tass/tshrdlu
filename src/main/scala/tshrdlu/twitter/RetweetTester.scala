@@ -20,6 +20,10 @@ object RetweetTester {
       Actors.mf = context.actorOf(Props[ModelFactory], name = "ModelFactory")
       Actors.ds = context.actorOf(Props[DataStore], name = "DataStore")
     }
+
+    def receive = {
+      case x => println(x)
+    }
   }
 
   class DeadLetterListener extends Actor {

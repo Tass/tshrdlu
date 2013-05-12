@@ -84,10 +84,10 @@ class Retweeter extends Actor with ActorLogging with PersistentMap {
               if(relevant(status, model)) {
                 val key = (userOption, keywords)
                 userOption match {
-                  case Some(user) => bot ! Bot.UpdateRetweet(key, new StatusUpdate(s"@$user $text" take 140).inReplyToStatusId(status.getId))
+                  case Some(user) => bot ! Bot.UpdateStatus(new StatusUpdate(s"@$user $text" take 140).inReplyToStatusId(status.getId))
                   case None =>
                     val response = (if (text.startsWith("RT")) {text} else {"RT " + text}) take 140
-                    val newStatus = (bot ? Bot.UpdateRetweet(key, new StatusUpdate(response).inReplyToStatusId(status.getId))).mapTo[Status]
+                    val newStatus = (bot ? Bot.UpdateStatus(new StatusUpdate(response).inReplyToStatusId(status.getId))).mapTo[Status]
                     newStatus.foreach(stat => ds ! SaveTweet(stat.getId, key, status))
                 }
               }
@@ -165,7 +165,9 @@ class ModelFactory extends Actor with ActorLogging with PersistentMap {
     // A certain tweet with id long has been responded to with positive/negative.
     case ImproveUpon(long: Long, label: Label) => {
       log.info(s"Improving upon $long")
-      (ds ? LoadTweet(long)).mapTo[Tuple2[Status, Set[ModelKey]]].foreach({case (tweet, forModels) => forModels.foreach(key => actors(key) ! ImproveTweet(tweet, label))})
+      (ds ? LoadTweet(long)).mapTo[Tuple2[Status, Set[ModelKey]]].foreach({
+        case (tweet, forModels) => forModels.foreach(key => actors(key) ! ImproveTweet(tweet, label))
+      })
     }
     // To wait for models to be trained. Send this message and wait
     // for it to return, you will then know the message queue has been
@@ -211,7 +213,7 @@ class ModelFactory extends Actor with ActorLogging with PersistentMap {
           val model = Set() ++ modelPath.getName.split('+').toList
           val key: ModelKey = (user, model)
           log.info(s"loading model $key")
-          actors += (key -> context.actorOf(Props(new Model(key, true)), name = key._1.toString + "$" + key._2.mkString("+")))
+          actors.getOrElseUpdate(key, context.actorOf(Props(new Model(key, true)), name = key._1.toString + "$" + key._2.mkString("+")))
         })
       }
     })
