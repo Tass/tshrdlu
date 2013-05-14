@@ -232,7 +232,9 @@ case class Train
 case class ImproveTweet(tweet: Status, label: Label)
 
 // Each model gets its own actor that knows about the model. In case
-// of updates, it notifies the parent so it can update the cache.
+// of updates, it notifies the parent so it can update the cache. The
+// loadFromDisk parameter exists so you can tell it to not try to load
+// a model from disk.
 class Model(key: ModelKey, loadFromDisk: Boolean = false) extends Actor with ActorLogging with PersistentMap {
   implicit val timeout = Timeout(1 hour)
   import Actors._
@@ -252,6 +254,7 @@ class Model(key: ModelKey, loadFromDisk: Boolean = false) extends Actor with Act
   val posFile = new File(keyToPath(key), "pos").getPath
   val negFile = new File(keyToPath(key), "neg").getPath
 
+  // Takes care of loading the model from disk.
   override def preStart {
     if (loadFromDisk) {
       loadBuffer(pos, posFile)
@@ -339,6 +342,7 @@ class Model(key: ModelKey, loadFromDisk: Boolean = false) extends Actor with Act
       notifyTrained
   }
 
+  // Don't train too much if more data is incoming. Waits for 30 seconds.
   def trainSoon() {
     trainingSchedule.foreach(_.cancel)
     trainingSchedule = Some(context.system.scheduler.scheduleOnce(30 seconds, self, Train))
@@ -357,6 +361,7 @@ class Model(key: ModelKey, loadFromDisk: Boolean = false) extends Actor with Act
     )
   }
 
+  // Fetches a bunch of user ids that can be used as a negative model.
   def negativeUserIDs(about: Iterable[String], users: Iterable[String]): Future[List[Long]] = {
     val friendIds = Future.sequence(users.map(user => (blocker ? FetchFriends(user)).mapTo[List[Long]])).map(_.flatten)
     val connected = Future.sequence(List(friendIds, consideredUsers((Positive(), Accepted())))).map(_.reduce(_ ++ _).toList)
@@ -478,6 +483,10 @@ object ScalaModel {
   }
 }
 
+// Contains the logic for saving/restoring data from/to the actors.
+// There is only one `save` and multiple `load`. This is because the
+// compiler needs to know more about the stuff ot loads than when it
+// saves.
 trait PersistentMap {
   import scala.collection.mutable._
   import java.io._

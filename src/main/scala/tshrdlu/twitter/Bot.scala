@@ -203,6 +203,9 @@ object TwitterRegex {
 
 }
 
+// Created as an Actor which takes care of fetching the tweets. Has
+// subactors per rate limit which block as soon as it is reached.
+// Maybe a waste of threads, but it does for now.
 class Fetcher extends Actor with ActorLogging {
   import Bot._
   import context.dispatcher
