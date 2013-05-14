@@ -7,38 +7,46 @@ import nak.data._
 import nak.util._
 
 object RetweetEvaluation {
-  val jason = readJSON(io.Source.fromFile("jason-data"))
-  val etorreborre = readJSON(io.Source.fromURL(getClass.getResource("/retweet/scala-lang")))
-  val negative = readJSON(io.Source.fromURL(getClass.getResource("/retweet/scala-lang-neg")))
+  lazy val jason = readJSON(io.Source.fromFile("jason-data"))
+  lazy val etorreborre = readJSON(io.Source.fromURL(getClass.getResource("/retweet/scala-lang")))
+  lazy val negative = readJSON(io.Source.fromURL(getClass.getResource("/retweet/scala-lang-neg")))
   // Simulates "tweets about scala like jasonbaldridge"
-  val jasonOriginal = jason.filter(_._1 == "Jason Baldridge").head._2
-  val neg = negative.take(5).flatMap(_._2.take(jasonOriginal.size/5))
+  lazy val jasonOriginal = jason.filter(_._1 == "Jason Baldridge").head._2
+  lazy val basicModel =
+    ScalaModel.train(Set("scala"),
+                     etorreborre("etorreborre").map(_._5),
+                     negative.mapValues(_.take(200)).values.flatten.take(etorreborre("etorreborre").size).map(_._5))
   def main(args: Array[String]) {
-    val wrong = basicEval()
-    val tenth = wrong.grouped(10).map(_.head).map(List.fill(20)(_)).flatten.map(_.features)
-    println("Adding tweets: " + tenth.size)
-    val negAddition: Iterable[String] = negative.map(_._2).map(_.drop(200).take(100)).filter(_.size == 100).transpose.flatten.take(tenth.size).map(_._5)
-    println(negAddition.size)
-    val improvedModel =
-      ScalaModel.train(Set("scala"),
-                       jasonOriginal.map(_._5) ++ tenth,
-                       neg.map(_._5) ++ negAddition)
-    val improvedEval = etorreborre.take(20).flatMap(_._2.drop(100).take(100)).map(ex => Example("positive", ex._5)) ++
-    negative.drop(5).take(20).flatMap(_._2.drop(100).take(100)).map(ex => Example("negative", ex._5))
-    val improvedPredicts = predictions(improvedModel, improvedEval)
-    println(ConfusionMatrix(improvedEval.map(_.label).toSeq, improvedPredicts.toSeq, improvedEval.map(_.features).toSeq))
+    println("Running baseline")
+    baseline
+    // println("Running improvement")
+    // improvement
   }
 
-  def basicEval(): Iterable[Example[String, String]] = {
-    val model = ScalaModel.train(Set("scala"), jasonOriginal.map(_._5), neg.map(_._5))
-    val eval = etorreborre.take(20).flatMap(_._2.take(100)).map(ex => Example("positive", ex._5)) ++
-    negative.drop(5).take(20).flatMap(_._2.take(100)).map(ex => Example("negative", ex._5))
-    val predicts = predictions(model, eval)
-    println(ConfusionMatrix(eval.map(_.label).toSeq, predicts.toSeq, eval.map(_.features).toSeq))
-    eval.zip(predicts).filter({
-      case (eval, pred) =>
-        eval.label != pred && eval.label == "positive"                           
-    }).map(_._1)
+  def baseline() {
+    testData.foreach(data =>
+      iteration(basicModel, data)
+    )
+  }
+
+  def improvement() {
+    var sets = testData
+    for {
+      x <- (1 to 10)
+    } yield {
+      println(s"run #$x")
+      var model: FeaturizedClassifier[String, String] = null
+      var posPool = etorreborre("etorreborre").map(_._5).toIterator
+      var pos = posPool.take(4000).toList      // 6k are available.
+      var neg = negative.mapValues(_.take(200)).values.flatten.map(_._5).take(etorreborre("etorreborre").size).toList
+      sets.foreach({set =>
+        model = ScalaModel.train(Set("scala"), pos, neg)
+        val wrong = iteration(model, set)
+        pos ++= posPool.take(wrong.size)
+        neg ++= wrong
+      })
+      sets = sets.last +: sets.dropRight(1)
+    }
   }
 
   def readJSON(file: io.Source) = {
@@ -53,4 +61,21 @@ object RetweetEvaluation {
       case false => "negative"
     })
   }
+
+  def iteration(model: FeaturizedClassifier[String, String], eval: Iterable[Example[String, String]]) = {
+    val preds = predictions(model, eval)
+    val wrong = eval.zip(preds).filter({
+      case (eval, pred) =>
+        eval.label != pred && eval.label == "negative"
+    }).map(_._1)
+    println(ConfusionMatrix(eval.map(_.label).toSeq, preds.toSeq, eval.map(_.features).toSeq).detailedOutput)
+    wrong.grouped(20).map(_.head).map(List.fill(20)(_)).flatten.map(_.features)
+  }
+
+  val testData = io.Source.fromFile("twitter-data").getLines.map(_.asJson.convertTo[Tuple6[Long, String, Long, String, String, String]]).toList
+    .map(x => (x._5, x._6 match { case "n" => "negative" case "y" => "positive" } ))
+    .groupBy(_._2)
+    .mapValues({list => (1 to 10).map(x => list.slice((x-1)*(list.size/10), x*(list.size/10))) .toSeq})
+    .map({case (label, bucket) => bucket.map(_.map({case (string, label) => Example(label, string)}))}).transpose.reduce(_++_)
+    .grouped(2).map(_.flatten).toList
 }

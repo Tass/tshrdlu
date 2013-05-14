@@ -90,7 +90,7 @@ object Grab {
 
   val to = new FileWriter(new File(dataFile), true)
   def dumpStatus(status: Status) {
-    to.write(Tuple5(status.getId, status.getUser.getName, status.getCreatedAt.getTime, status.isRetweet.toString, status.getText).toJson.compactPrint)
+    to.write(Tuple5(status.getId, status.getUser.getScreenName, status.getCreatedAt.getTime, status.isRetweet.toString, status.getText).toJson.compactPrint)
     to.write("\n")
     to.flush()
   }
@@ -114,5 +114,25 @@ object Grab {
         case _ => 0
       }
     }).foldLeft(0)(_ + _) > 0
+  }
+}
+
+object Query {
+  val twitter = new TwitterFactory().getInstance
+  def main(args: Array[String]) {
+    val queryText = args.mkString(" ")
+    var q = new Query(queryText)
+    var result: QueryResult = null
+    while(result == null || result.hasNext) {
+      q.count(100)
+      q.lang("en")
+      result = twitter.search(q)
+      result.getTweets.map(Grab.dumpStatus(_))
+      if (result.getRateLimitStatus.getRemaining == 0) {
+        println("waiting.... " + result.getRateLimitStatus.getSecondsUntilReset)
+        Thread.sleep((result.getRateLimitStatus.getSecondsUntilReset + 10)*1000)
+      }
+      q = result.nextQuery
+    }
   }
 }
